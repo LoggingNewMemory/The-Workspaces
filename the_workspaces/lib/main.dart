@@ -1,20 +1,20 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:window_manager/window_manager.dart';
 import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize the window manager
   await windowManager.ensureInitialized();
 
   WindowOptions windowOptions = const WindowOptions(
     size: Size(1280, 720),
     center: true,
     backgroundColor: Colors.transparent,
-    skipTaskbar: true, // Hides it from your normal DE taskbar
-    titleBarStyle: TitleBarStyle.hidden, // Removes the top bar
-    fullScreen: true, // Takes over the monitor like an Android Launcher
+    skipTaskbar: true,
+    titleBarStyle: TitleBarStyle.hidden,
+    fullScreen: true,
   );
 
   windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -48,6 +48,49 @@ class WorkspaceDashboard extends StatefulWidget {
 
 class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
   String activeZone = '';
+  String? systemWallpaperPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchKdeWallpaper();
+  }
+
+  // Parses the KDE Plasma configuration file to find the current active wallpaper
+  Future<void> _fetchKdeWallpaper() async {
+    if (!Platform.isLinux) return;
+
+    try {
+      final home = Platform.environment['HOME'];
+      final file = File(
+        '$home/.config/plasma-org.kde.plasma.desktop-appletsrc',
+      );
+
+      if (await file.exists()) {
+        final lines = await file.readAsLines();
+
+        // We read backwards because the active configuration is usually appended at the bottom
+        for (var line in lines.reversed) {
+          line = line.trim();
+          if (line.startsWith('Image=file://')) {
+            setState(() {
+              systemWallpaperPath = line.substring(
+                13,
+              ); // Strips 'Image=file://'
+            });
+            return;
+          } else if (line.startsWith('Image=/')) {
+            setState(() {
+              systemWallpaperPath = line.substring(6); // Strips 'Image='
+            });
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Could not fetch KDE wallpaper: $e');
+    }
+  }
 
   Widget buildTriggerZone({
     required String zone,
@@ -71,7 +114,7 @@ class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
           width: isActive ? expandedWidth : restingWidth,
           height: isActive ? expandedHeight : restingHeight,
           decoration: BoxDecoration(
-            color: isActive ? Colors.black.withOpacity(0.9) : Colors.black45,
+            color: isActive ? Colors.black.withOpacity(0.85) : Colors.black45,
           ),
           child: isActive ? child : null,
         ),
@@ -81,11 +124,9 @@ class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
 
   @override
   Widget build(BuildContext context) {
-    // Focus node catches keyboard inputs for the entire screen
     return Focus(
       autofocus: true,
       onKeyEvent: (node, event) {
-        // Check if the key is pressed down and is the Escape key
         if (event is KeyDownEvent &&
             event.logicalKey == LogicalKeyboardKey.escape) {
           windowManager.close();
@@ -94,62 +135,64 @@ class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
         return KeyEventResult.ignored;
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF1E1E2E),
-        body: Stack(
-          children: [
-            // CENTER
-            const Center(
-              child: Text(
-                'MAIN LAUNCHER DASHBOARD\n(Escape to exit now works!)',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 24, color: Colors.white54),
+        body: Container(
+          // Set the background image to the system wallpaper, fallback to dark color
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E1E2E),
+            image: systemWallpaperPath != null
+                ? DecorationImage(
+                    image: FileImage(File(systemWallpaperPath!)),
+                    fit: BoxFit.cover,
+                  )
+                : null,
+          ),
+          child: Stack(
+            children: [
+              // LEFT ZONE
+              buildTriggerZone(
+                zone: 'L',
+                alignment: Alignment.centerLeft,
+                restingWidth: 20,
+                restingHeight: double.infinity,
+                expandedWidth: 400,
+                expandedHeight: double.infinity,
+                child: const Center(child: Text('[Workspaces / Apps]')),
               ),
-            ),
 
-            // LEFT ZONE
-            buildTriggerZone(
-              zone: 'L',
-              alignment: Alignment.centerLeft,
-              restingWidth: 20,
-              restingHeight: double.infinity,
-              expandedWidth: 400,
-              expandedHeight: double.infinity,
-              child: const Center(child: Text('[Workspaces / Apps]')),
-            ),
+              // RIGHT ZONE
+              buildTriggerZone(
+                zone: 'R',
+                alignment: Alignment.centerRight,
+                restingWidth: 20,
+                restingHeight: double.infinity,
+                expandedWidth: 400,
+                expandedHeight: double.infinity,
+                child: const Center(child: Text('[Workspaces / Apps]')),
+              ),
 
-            // RIGHT ZONE
-            buildTriggerZone(
-              zone: 'R',
-              alignment: Alignment.centerRight,
-              restingWidth: 20,
-              restingHeight: double.infinity,
-              expandedWidth: 400,
-              expandedHeight: double.infinity,
-              child: const Center(child: Text('[Workspaces / Apps]')),
-            ),
+              // TOP ZONE
+              buildTriggerZone(
+                zone: 'U',
+                alignment: Alignment.topCenter,
+                restingWidth: double.infinity,
+                restingHeight: 20,
+                expandedWidth: double.infinity,
+                expandedHeight: 250,
+                child: const Center(child: Text('[MUSIC & NOTIFICATIONS]')),
+              ),
 
-            // TOP ZONE
-            buildTriggerZone(
-              zone: 'U',
-              alignment: Alignment.topCenter,
-              restingWidth: double.infinity,
-              restingHeight: 20,
-              expandedWidth: double.infinity,
-              expandedHeight: 250,
-              child: const Center(child: Text('[MUSIC & NOTIFICATIONS]')),
-            ),
-
-            // BOTTOM ZONE
-            buildTriggerZone(
-              zone: 'D',
-              alignment: Alignment.bottomCenter,
-              restingWidth: 600,
-              restingHeight: 20,
-              expandedWidth: 800,
-              expandedHeight: 120,
-              child: const Center(child: Text('[MACOS DOCK]')),
-            ),
-          ],
+              // BOTTOM ZONE
+              buildTriggerZone(
+                zone: 'D',
+                alignment: Alignment.bottomCenter,
+                restingWidth: 600,
+                restingHeight: 20,
+                expandedWidth: 800,
+                expandedHeight: 120,
+                child: const Center(child: Text('[MACOS DOCK]')),
+              ),
+            ],
+          ),
         ),
       ),
     );
