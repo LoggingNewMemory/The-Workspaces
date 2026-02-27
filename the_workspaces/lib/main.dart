@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
+// Import your new modular files
+import 'left_right_side.dart';
+import 'dock.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -47,7 +51,6 @@ class WorkspaceDashboard extends StatefulWidget {
 }
 
 class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
-  String activeZone = '';
   String? systemWallpaperPath;
 
   @override
@@ -56,7 +59,6 @@ class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
     _fetchKdeWallpaper();
   }
 
-  // Parses the KDE Plasma configuration file to find the current active wallpaper
   Future<void> _fetchKdeWallpaper() async {
     if (!Platform.isLinux) return;
 
@@ -69,19 +71,16 @@ class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
       if (await file.exists()) {
         final lines = await file.readAsLines();
 
-        // We read backwards because the active configuration is usually appended at the bottom
         for (var line in lines.reversed) {
           line = line.trim();
           if (line.startsWith('Image=file://')) {
             setState(() {
-              systemWallpaperPath = line.substring(
-                13,
-              ); // Strips 'Image=file://'
+              systemWallpaperPath = line.substring(13);
             });
             return;
           } else if (line.startsWith('Image=/')) {
             setState(() {
-              systemWallpaperPath = line.substring(6); // Strips 'Image='
+              systemWallpaperPath = line.substring(6);
             });
             return;
           }
@@ -90,36 +89,6 @@ class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
     } catch (e) {
       debugPrint('Could not fetch KDE wallpaper: $e');
     }
-  }
-
-  Widget buildTriggerZone({
-    required String zone,
-    required Alignment alignment,
-    required double restingWidth,
-    required double restingHeight,
-    required double expandedWidth,
-    required double expandedHeight,
-    required Widget child,
-  }) {
-    bool isActive = activeZone == zone;
-
-    return Align(
-      alignment: alignment,
-      child: MouseRegion(
-        onEnter: (_) => setState(() => activeZone = zone),
-        onExit: (_) => setState(() => activeZone = ''),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutExpo,
-          width: isActive ? expandedWidth : restingWidth,
-          height: isActive ? expandedHeight : restingHeight,
-          decoration: BoxDecoration(
-            color: isActive ? Colors.black.withOpacity(0.85) : Colors.black45,
-          ),
-          child: isActive ? child : null,
-        ),
-      ),
-    );
   }
 
   @override
@@ -136,7 +105,6 @@ class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
       },
       child: Scaffold(
         body: Container(
-          // Set the background image to the system wallpaper, fallback to dark color
           decoration: BoxDecoration(
             color: const Color(0xFF1E1E2E),
             image: systemWallpaperPath != null
@@ -146,53 +114,66 @@ class _WorkspaceDashboardState extends State<WorkspaceDashboard> {
                   )
                 : null,
           ),
-          child: Stack(
+          child: const Stack(
             children: [
               // LEFT ZONE
-              buildTriggerZone(
-                zone: 'L',
+              SidePanel(
                 alignment: Alignment.centerLeft,
-                restingWidth: 20,
-                restingHeight: double.infinity,
-                expandedWidth: 400,
-                expandedHeight: double.infinity,
-                child: const Center(child: Text('[Workspaces / Apps]')),
+                label: '[Workspaces / Apps]',
               ),
 
               // RIGHT ZONE
-              buildTriggerZone(
-                zone: 'R',
+              SidePanel(
                 alignment: Alignment.centerRight,
-                restingWidth: 20,
-                restingHeight: double.infinity,
-                expandedWidth: 400,
-                expandedHeight: double.infinity,
-                child: const Center(child: Text('[Workspaces / Apps]')),
+                label: '[Workspaces / Apps]',
               ),
 
               // TOP ZONE
-              buildTriggerZone(
-                zone: 'U',
-                alignment: Alignment.topCenter,
-                restingWidth: double.infinity,
-                restingHeight: 20,
-                expandedWidth: double.infinity,
-                expandedHeight: 250,
-                child: const Center(child: Text('[MUSIC & NOTIFICATIONS]')),
-              ),
+              TopMusicNotificationPanel(),
 
-              // BOTTOM ZONE
-              buildTriggerZone(
-                zone: 'D',
-                alignment: Alignment.bottomCenter,
-                restingWidth: 600,
-                restingHeight: 20,
-                expandedWidth: 800,
-                expandedHeight: 120,
-                child: const Center(child: Text('[MACOS DOCK]')),
-              ),
+              // BOTTOM ZONE (From dock.dart)
+              DockPanel(),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// Extracted the Top Zone into its own local-state widget for consistency
+class TopMusicNotificationPanel extends StatefulWidget {
+  const TopMusicNotificationPanel({super.key});
+
+  @override
+  State<TopMusicNotificationPanel> createState() =>
+      _TopMusicNotificationPanelState();
+}
+
+class _TopMusicNotificationPanelState extends State<TopMusicNotificationPanel> {
+  bool isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => isHovered = true),
+        onExit: (_) => setState(() => isHovered = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutExpo,
+          width: double.infinity,
+          height: isHovered ? 250.0 : 20.0,
+          decoration: BoxDecoration(
+            color: isHovered ? Colors.black.withOpacity(0.85) : Colors.black45,
+            border: isHovered
+                ? const Border(bottom: BorderSide(color: Colors.white24))
+                : const Border(),
+          ),
+          child: isHovered
+              ? const Center(child: Text('[MUSIC & NOTIFICATIONS]'))
+              : null,
         ),
       ),
     );
