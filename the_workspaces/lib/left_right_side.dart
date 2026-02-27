@@ -15,27 +15,44 @@ class SidePanel extends StatefulWidget {
 
 class _SidePanelState extends State<SidePanel> {
   bool isHovered = false;
+  bool isWindowHovering = false; // From Compositor IPC
+  List<Map<String, String>> containedWindows = [];
   Timer? _timer;
-
-  // This will now be populated live from the C compositor
-  List<Map<String, String>> activeWindows = [];
 
   @override
   void initState() {
     super.initState();
-    _startWatchingCompositor();
+    _startWatchingCompositorState();
   }
 
-  void _startWatchingCompositor() {
-    // Poll the /tmp file every 500ms for instant UI updates
-    _timer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  // Polls the central Workspace JSON state (Fast 50ms polling for smooth hover)
+  void _startWatchingCompositorState() {
+    bool isLeft = widget.alignment == Alignment.centerLeft;
+    int myHoverID = isLeft ? 1 : 2;
+
+    _timer = Timer.periodic(const Duration(milliseconds: 50), (_) async {
       try {
-        final file = File('/tmp/workspace_windows.json');
+        final file = File('/tmp/workspace_state.json');
         if (await file.exists()) {
           final content = await file.readAsString();
-          final List<dynamic> decoded = jsonDecode(content);
+          final decoded = jsonDecode(content);
 
-          List<Map<String, String>> newWindows = decoded
+          // 1. Check if compositor is dragging a window over our edge
+          bool currentlyHovering = (decoded['hover'] == myHoverID);
+          if (currentlyHovering != isWindowHovering) {
+            setState(() => isWindowHovering = currentlyHovering);
+          }
+
+          // 2. Parse docked windows for this side
+          final List<dynamic> dockedData =
+              decoded[isLeft ? 'docked_left' : 'docked_right'];
+          List<Map<String, String>> newWindows = dockedData
               .map(
                 (e) => {
                   'id': e['id'].toString(),
@@ -45,158 +62,200 @@ class _SidePanelState extends State<SidePanel> {
               )
               .toList();
 
-          // Only update the state if the window list actually changed
-          if (newWindows.toString() != activeWindows.toString()) {
-            setState(() => activeWindows = newWindows);
+          if (newWindows.toString() != containedWindows.toString()) {
+            setState(() => containedWindows = newWindows);
           }
         }
       } catch (e) {
-        // Suppress read errors (happens occasionally if reading while C is writing)
+        // Suppress read/parse errors during C file writes
       }
     });
   }
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
+  // Request to Undock OR to handle drags originating from the Flutter Dock UI
+  void _sendDockAction(String action, String id) {
+    try {
+      final file = File('/tmp/dock_action.txt');
+      file.writeAsStringSync('$action $id\n');
+    } catch (e) {
+      debugPrint('Failed to send dock action: $e');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     bool isLeft = widget.alignment == Alignment.centerLeft;
+    String dockActionType = isLeft ? 'DOCK_LEFT' : 'DOCK_RIGHT';
 
     return Align(
       alignment: widget.alignment,
-      child: MouseRegion(
-        onEnter: (_) => setState(() => isHovered = true),
-        onExit: (_) => setState(() => isHovered = false),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutExpo,
-          width: isHovered ? 450.0 : 20.0, // Expanded width for the large cards
-          height: double.infinity,
-          decoration: BoxDecoration(
-            color: isHovered
-                ? const Color(0xFF11111B).withOpacity(0.9)
-                : Colors.transparent,
-            border: Border(
-              left: !isLeft && isHovered
-                  ? const BorderSide(color: Colors.white12)
-                  : BorderSide.none,
-              right: isLeft && isHovered
-                  ? const BorderSide(color: Colors.white12)
-                  : BorderSide.none,
-            ),
-          ),
-          child: isHovered
-              ? Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Header matching your design
-                      Text(
-                        widget.label,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 2.0,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      const Divider(color: Colors.white24, height: 1),
-                      const SizedBox(height: 24),
+      child: DragTarget<Map>(
+        onWillAccept: (data) => true,
+        onAccept: (data) {
+          // Triggered ONLY if dragged from the Flutter bottom dock
+          _sendDockAction(dockActionType, data['id']);
+        },
+        builder: (context, candidateData, rejectedData) {
+          // Open if mouse is over it, a flutter drag is over it, OR the C compositor says a window is dragged over it!
+          bool isExpanded =
+              isHovered ||
+              candidateData.isNotEmpty ||
+              isWindowHovering ||
+              containedWindows.isNotEmpty;
 
-                      // The Window Cards
-                      Expanded(
-                        child: ListView.builder(
-                          itemCount: activeWindows.length,
-                          itemBuilder: (context, index) {
-                            final win = activeWindows[index];
-                            return _buildWindowCard(win);
-                          },
+          return MouseRegion(
+            onEnter: (_) => setState(() => isHovered = true),
+            onExit: (_) => setState(() => isHovered = false),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutExpo,
+              width: isExpanded ? 340.0 : 40.0,
+              height: double.infinity,
+              decoration: BoxDecoration(
+                color: isExpanded
+                    ? const Color(0xFF11111B).withOpacity(0.95)
+                    : Colors.transparent,
+                border: Border(
+                  left: !isLeft && isExpanded
+                      ? const BorderSide(color: Colors.white12)
+                      : BorderSide.none,
+                  right: isLeft && isExpanded
+                      ? const BorderSide(color: Colors.white12)
+                      : BorderSide.none,
+                ),
+              ),
+              child: isExpanded
+                  ? Padding(
+                      padding: const EdgeInsets.only(
+                        top: 48.0,
+                        left: 24.0,
+                        right: 24.0,
+                        bottom: 24.0,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            (candidateData.isNotEmpty || isWindowHovering)
+                                ? 'DROP APP HERE'
+                                : widget.label,
+                            style: TextStyle(
+                              color:
+                                  (candidateData.isNotEmpty || isWindowHovering)
+                                  ? Colors.blueAccent
+                                  : Colors.white60,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.5,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Divider(
+                            color:
+                                (candidateData.isNotEmpty || isWindowHovering)
+                                ? Colors.blueAccent
+                                : Colors.white12,
+                            height: 1,
+                          ),
+                          const SizedBox(height: 16),
+
+                          if (containedWindows.isEmpty)
+                            const Expanded(
+                              child: Center(
+                                child: Text(
+                                  "Drag an active app here\nto dock it.",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.white30),
+                                ),
+                              ),
+                            )
+                          else
+                            Expanded(
+                              child: ListView.builder(
+                                itemCount: containedWindows.length,
+                                itemBuilder: (context, index) {
+                                  return _buildListItem(
+                                    containedWindows[index],
+                                  );
+                                },
+                              ),
+                            ),
+                        ],
+                      ),
+                    )
+                  : Container(
+                      alignment: isLeft
+                          ? Alignment.centerLeft
+                          : Alignment.centerRight,
+                      child: Container(
+                        width: 4,
+                        height: 60,
+                        margin: EdgeInsets.only(
+                          left: isLeft ? 2 : 0,
+                          right: !isLeft ? 2 : 0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(4),
                         ),
                       ),
-                    ],
-                  ),
-                )
-              : null,
-        ),
+                    ),
+            ),
+          );
+        },
       ),
     );
   }
 
-  Widget _buildWindowCard(Map<String, String> win) {
-    Widget card = Container(
-      height: 220, // Large height to mimic a thumbnail
-      margin: const EdgeInsets.only(bottom: 24),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E1E2E), // Darker aesthetic background
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.5),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Stack(
-        children: [
-          // Placeholder for the App Icon / Graphic
-          Center(
-            child: Icon(
-              win['name'] == 'Firefox' ? Icons.public : Icons.code,
-              size: 80,
-              color: Colors.white24,
-            ),
-          ),
-          // Title Bar at the bottom of the card
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
-                borderRadius: const BorderRadius.vertical(
-                  bottom: Radius.circular(16),
-                ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    win['name']!,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    win['title']!,
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+  Widget _buildListItem(Map win) {
+    String title = win['title'] ?? 'Unknown';
+    String className = win['name'] ?? 'unknown';
 
-    // Make the card draggable
-    return Draggable<String>(
-      data: win['id'],
-      feedback: Opacity(opacity: 0.7, child: SizedBox(width: 400, child: card)),
-      childWhenDragging: Opacity(opacity: 0.3, child: card),
-      child: card,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12.0),
+      color: Colors.transparent,
+      child: Row(
+        children: [
+          const Icon(
+            Icons.branding_watermark_outlined,
+            color: Colors.white70,
+            size: 28,
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title.isEmpty ? className : title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Class: ${className.toLowerCase()}',
+                  style: const TextStyle(color: Colors.white38, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.exit_to_app, color: Colors.blueAccent),
+            tooltip: 'Undock App',
+            onPressed: () {
+              _sendDockAction('UNDOCK', win['id']!);
+            },
+          ),
+        ],
+      ),
     );
   }
 }
