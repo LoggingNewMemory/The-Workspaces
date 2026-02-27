@@ -658,46 +658,50 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 }
 
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
-    /* Called when the surface is mapped, or ready to display on-screen. */
     struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, map);
-
-    // 1. Add the window to our compositor's list of active windows
     wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
+
+    // --- VIP BYPASS FOR THE FLUTTER HUD ---
+    const char *app_id = toplevel->xdg_toplevel->app_id;
+    
+    // Check if the app ID contains "workspace" (the name of your Flutter binary)
+    if (app_id != NULL && strstr(app_id, "workspace") != NULL) {
+        // Force the HUD to take up the whole screen
+        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+        wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+        focus_toplevel(toplevel);
+        
+        // EXIT EARLY! Do not run the tiling logic below
+        return; 
+    }
+    // --------------------------------------
 
     // --- CUSTOM WORKSPACE TILING LOGIC START ---
     
-    // Count how many windows we currently have open
-    int window_count = wl_list_length(&toplevel->server->toplevels);
+    // We must exclude the HUD from our window count so the math doesn't break
+    int window_count = wl_list_length(&toplevel->server->toplevels) - 1; // Subtract 1 for the HUD
 
     int target_x = 0;
     int target_y = 0;
-    int target_width = 400; // Your exact sidebar width
-    int target_height = 1080; // Your monitor height
+    int target_width = 400; 
+    int target_height = 1080; 
 
     if (window_count == 1) {
-        // First window opens -> Snap to LEFT Zone
-        target_x = 0;
+        target_x = 0; // Left
     } else if (window_count == 2) {
-        // Second window opens -> Snap to RIGHT Zone
-        // Math: 1920 (Monitor Width) - 400 (Target Width) = 1520
-        target_x = 1520; 
+        target_x = 1520; // Right
     } else {
-        // 3rd+ window -> Drop it in the middle for now
-        target_x = 500 + (window_count * 20); // Slight offset so they don't perfectly overlap
+        // Center fallback
+        target_x = 500 + (window_count * 20); 
         target_y = 100;
         target_width = 800;
         target_height = 600;
     }
 
-    // 2. Tell the Wayland application to resize its internal graphics buffer
     wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, target_width, target_height);
-
-    // 3. Command the compositor's scene graph to physically move the window node
     wlr_scene_node_set_position(&toplevel->scene_tree->node, target_x, target_y);
-    
     // --- CUSTOM WORKSPACE TILING LOGIC END ---
 
-    // Give the newly opened window keyboard focus
     focus_toplevel(toplevel);
 }
 
