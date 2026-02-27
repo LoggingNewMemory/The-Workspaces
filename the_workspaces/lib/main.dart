@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
-import 'left_right_side.dart';
+import 'side_container.dart';
 import 'dock.dart';
 
 void main() async {
