@@ -138,7 +138,22 @@ class _DockPanelState extends State<DockPanel> {
                           );
 
                     return GestureDetector(
-                      onTap: () => Process.start('sh', ['-c', app.exec]),
+                      onTap: () {
+                        Process.start(
+                          'sh',
+                          ['-c', app.exec],
+                          environment: {
+                            'DISPLAY':
+                                '', // Cut off access to the host X11 server
+                            'QT_QPA_PLATFORM':
+                                'wayland', // Force Qt apps to use Wayland
+                            'GDK_BACKEND':
+                                'wayland', // Force GTK apps to use Wayland
+                          },
+                          includeParentEnvironment:
+                              true, // Keep the WAYLAND_DISPLAY from tinywl!
+                        );
+                      },
                       child: Tooltip(
                         message: app.name,
                         child: Container(
