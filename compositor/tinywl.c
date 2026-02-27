@@ -657,6 +657,35 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
 }
 
+// --- IPC BRIDGE: EXPORT WINDOW LIST TO FLUTTER ---
+static void update_window_list(struct tinywl_server *server) {
+    FILE *f = fopen("/tmp/workspace_windows.json", "w");
+    if (!f) return;
+
+    fprintf(f, "[\n");
+    struct tinywl_toplevel *toplevel;
+    bool first = true;
+    
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        const char *app_id = toplevel->xdg_toplevel->app_id ? toplevel->xdg_toplevel->app_id : "Unknown";
+        const char *title = toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title : "Unknown Window";
+
+        // VIP BYPASS: Do not include the Flutter HUD in the list!
+        if (strstr(app_id, "the_workspaces") != NULL) continue;
+
+        if (!first) fprintf(f, ",\n");
+        
+        // We use the memory address of the window as its unique ID
+        fprintf(f, "  { \"id\": \"%p\", \"name\": \"%s\", \"title\": \"%s\" }", 
+                (void*)toplevel, app_id, title);
+        first = false;
+    }
+    
+    fprintf(f, "\n]\n");
+    fclose(f);
+}
+// -------------------------------------------------
+
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
     struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, map);
     wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
@@ -703,6 +732,7 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
     // --- CUSTOM WORKSPACE TILING LOGIC END ---
 
     focus_toplevel(toplevel);
+	update_window_list(toplevel->server);
 }
 
 static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
@@ -715,6 +745,7 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	}
 
 	wl_list_remove(&toplevel->link);
+	update_window_list(toplevel->server);
 }
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {

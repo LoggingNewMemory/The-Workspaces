@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 class SidePanel extends StatefulWidget {
@@ -12,12 +15,52 @@ class SidePanel extends StatefulWidget {
 
 class _SidePanelState extends State<SidePanel> {
   bool isHovered = false;
+  Timer? _timer;
 
-  // Dummy data until we wire up the C Compositor IPC
-  final List<Map<String, String>> activeWindows = [
-    {'id': '1', 'name': 'Firefox', 'title': 'Otonose Raco - YouTube'},
-    {'id': '2', 'name': 'Code', 'title': 'tinywl.c - The Workspaces'},
-  ];
+  // This will now be populated live from the C compositor
+  List<Map<String, String>> activeWindows = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _startWatchingCompositor();
+  }
+
+  void _startWatchingCompositor() {
+    // Poll the /tmp file every 500ms for instant UI updates
+    _timer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
+      try {
+        final file = File('/tmp/workspace_windows.json');
+        if (await file.exists()) {
+          final content = await file.readAsString();
+          final List<dynamic> decoded = jsonDecode(content);
+
+          List<Map<String, String>> newWindows = decoded
+              .map(
+                (e) => {
+                  'id': e['id'].toString(),
+                  'name': e['name'].toString(),
+                  'title': e['title'].toString(),
+                },
+              )
+              .toList();
+
+          // Only update the state if the window list actually changed
+          if (newWindows.toString() != activeWindows.toString()) {
+            setState(() => activeWindows = newWindows);
+          }
+        }
+      } catch (e) {
+        // Suppress read errors (happens occasionally if reading while C is writing)
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
