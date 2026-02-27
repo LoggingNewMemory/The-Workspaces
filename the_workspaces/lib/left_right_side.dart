@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 
 class SidePanel extends StatefulWidget {
@@ -13,61 +12,12 @@ class SidePanel extends StatefulWidget {
 
 class _SidePanelState extends State<SidePanel> {
   bool isHovered = false;
-  List<String> dockedWindowIds = [];
 
-  final List<Map<String, String>> dockableApps = [
-    {'name': 'Firefox', 'class': 'firefox'},
-    {'name': 'VS Code', 'class': 'code'},
-    {'name': 'Terminal', 'class': 'konsole'},
-    {'name': 'Dolphin', 'class': 'dolphin'},
+  // Dummy data until we wire up the C Compositor IPC
+  final List<Map<String, String>> activeWindows = [
+    {'id': '1', 'name': 'Firefox', 'title': 'Otonose Raco - YouTube'},
+    {'id': '2', 'name': 'Code', 'title': 'tinywl.c - The Workspaces'},
   ];
-
-  Future<void> _retileWindows(BuildContext context) async {
-    if (dockedWindowIds.isEmpty) return;
-    bool isLeft = widget.alignment == Alignment.centerLeft;
-    final size = MediaQuery.of(context).size;
-
-    int targetWidth = 400;
-    int targetHeight = (size.height / dockedWindowIds.length).floor();
-    int targetX = isLeft ? 0 : (size.width - targetWidth).toInt();
-
-    for (int i = 0; i < dockedWindowIds.length; i++) {
-      String winId = dockedWindowIds[i];
-      int targetY = i * targetHeight;
-      await Process.run('kdotool', [
-        'windowmove',
-        winId,
-        targetX.toString(),
-        targetY.toString(),
-      ]);
-      await Process.run('kdotool', [
-        'windowsize',
-        winId,
-        targetWidth.toString(),
-        targetHeight.toString(),
-      ]);
-    }
-  }
-
-  Future<void> _dockWindow(String windowClass, BuildContext context) async {
-    try {
-      var searchResult = await Process.run('kdotool', [
-        'search',
-        '--class',
-        windowClass,
-      ]);
-      String output = searchResult.stdout.toString().trim();
-      if (output.isEmpty) return;
-
-      String windowId = output.split('\n').first;
-      if (!dockedWindowIds.contains(windowId)) {
-        setState(() => dockedWindowIds.add(windowId));
-        await _retileWindows(context);
-      }
-    } catch (e) {
-      debugPrint('Error docking window: $e');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,100 +29,131 @@ class _SidePanelState extends State<SidePanel> {
         onEnter: (_) => setState(() => isHovered = true),
         onExit: (_) => setState(() => isHovered = false),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
+          duration: const Duration(milliseconds: 300),
           curve: Curves.easeOutExpo,
-          width: isHovered ? 400.0 : 20.0,
+          width: isHovered ? 450.0 : 20.0, // Expanded width for the large cards
           height: double.infinity,
           decoration: BoxDecoration(
-            color: isHovered ? Colors.black.withOpacity(0.85) : Colors.black45,
+            color: isHovered
+                ? const Color(0xFF11111B).withOpacity(0.9)
+                : Colors.transparent,
             border: Border(
               left: !isLeft && isHovered
-                  ? const BorderSide(color: Colors.white24)
+                  ? const BorderSide(color: Colors.white12)
                   : BorderSide.none,
               right: isLeft && isHovered
-                  ? const BorderSide(color: Colors.white24)
+                  ? const BorderSide(color: Colors.white12)
                   : BorderSide.none,
             ),
           ),
-          child: DragTarget<String>(
-            onAcceptWithDetails: (details) =>
-                _dockWindow(details.data, context),
-            builder: (context, candidateData, rejectedData) {
-              if (!isHovered) return const SizedBox();
-              return Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.label,
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontWeight: FontWeight.bold,
+          child: isHovered
+              ? Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header matching your design
+                      Text(
+                        widget.label,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 2.0,
+                          fontSize: 16,
+                        ),
                       ),
-                    ),
-                    const Divider(color: Colors.white24, height: 32),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: dockableApps.length,
-                        itemBuilder: (context, index) {
-                          final app = dockableApps[index];
-                          Widget appTile = ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(
-                              Icons.aspect_ratio,
-                              color: Colors.white70,
-                            ),
-                            title: Text(
-                              app['name']!,
-                              style: const TextStyle(color: Colors.white),
-                            ),
-                            subtitle: Text(
-                              'Class: ${app['class']}',
-                              style: const TextStyle(
-                                color: Colors.white30,
-                                fontSize: 12,
-                              ),
-                            ),
-                            trailing: IconButton(
-                              icon: const Icon(
-                                Icons.input,
-                                color: Colors.blueAccent,
-                              ),
-                              onPressed: () =>
-                                  _dockWindow(app['class']!, context),
-                            ),
-                          );
-                          return Draggable<String>(
-                            data: app['class'],
-                            feedback: Material(
-                              color: Colors.transparent,
-                              child: Container(
-                                width: 250,
-                                padding: const EdgeInsets.all(8),
-                                color: Colors.blueGrey.shade900,
-                                child: Text(
-                                  'Docking ${app['name']}...',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                              ),
-                            ),
-                            childWhenDragging: Opacity(
-                              opacity: 0.3,
-                              child: appTile,
-                            ),
-                            child: appTile,
-                          );
-                        },
+                      const SizedBox(height: 12),
+                      const Divider(color: Colors.white24, height: 1),
+                      const SizedBox(height: 24),
+
+                      // The Window Cards
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: activeWindows.length,
+                          itemBuilder: (context, index) {
+                            final win = activeWindows[index];
+                            return _buildWindowCard(win);
+                          },
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+                    ],
+                  ),
+                )
+              : null,
         ),
       ),
+    );
+  }
+
+  Widget _buildWindowCard(Map<String, String> win) {
+    Widget card = Container(
+      height: 220, // Large height to mimic a thumbnail
+      margin: const EdgeInsets.only(bottom: 24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E2E), // Darker aesthetic background
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.5),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          // Placeholder for the App Icon / Graphic
+          Center(
+            child: Icon(
+              win['name'] == 'Firefox' ? Icons.public : Icons.code,
+              size: 80,
+              color: Colors.white24,
+            ),
+          ),
+          // Title Bar at the bottom of the card
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(16),
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    win['name']!,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    win['title']!,
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    // Make the card draggable
+    return Draggable<String>(
+      data: win['id'],
+      feedback: Opacity(opacity: 0.7, child: SizedBox(width: 400, child: card)),
+      childWhenDragging: Opacity(opacity: 0.3, child: card),
+      child: card,
     );
   }
 }
