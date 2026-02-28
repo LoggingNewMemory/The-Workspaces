@@ -66,12 +66,12 @@ struct tinywl_server {
 	uint32_t resize_edges;
 
 	struct wlr_output_layout *output_layout;
-	struct wl_listener layout_change; // <-- Added listener for output resizing
+	struct wl_listener layout_change; 
 	struct wl_list outputs;
 	struct wl_listener new_output;
     
 	struct wl_event_source *dock_ipc_timer;
-	int last_hover; // 0 = none, 1 = left, 2 = right
+	int last_hover; 
 };
 
 struct tinywl_output {
@@ -97,9 +97,8 @@ struct tinywl_toplevel {
 	struct wl_listener request_maximize;
 	struct wl_listener request_fullscreen;
     
-	int docked_side; // 0 = not docked, 1 = left, 2 = right
+	int docked_side; 
     
-	// Maximize State Tracking
 	bool maximized;
 	double saved_x;
 	double saved_y;
@@ -122,7 +121,6 @@ struct tinywl_keyboard {
 	struct wl_listener destroy;
 };
 
-// Forward declaration for state updates
 static void update_workspace_state(struct tinywl_server *server);
 
 static void focus_toplevel(struct tinywl_toplevel *toplevel) {
@@ -310,15 +308,13 @@ static void process_cursor_move(struct tinywl_server *server) {
 		server->cursor->x - server->grab_x,
 		server->cursor->y - server->grab_y);
 
-	// Fetch dynamic output width for accurate hovering
 	struct wlr_box box;
 	wlr_output_layout_get_box(server->output_layout, NULL, &box);
 	int out_width = box.width > 0 ? box.width : 1920;
 
-	// --- NATIVE EDGE HOVER DETECTION ---
 	int current_hover = 0;
-	if (server->cursor->x < 40) current_hover = 1;       // Left Edge
-	else if (server->cursor->x > out_width - 40) current_hover = 2; // Right Edge
+	if (server->cursor->x < 40) current_hover = 1;      
+	else if (server->cursor->x > out_width - 40) current_hover = 2; 
 
 	if (server->last_hover != current_hover) {
 		server->last_hover = current_hover;
@@ -405,24 +401,22 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 	wlr_seat_pointer_notify_button(server->seat, event->time_msec, event->button, event->state);
             
 	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
-		// --- NATIVE DRAG & DROP DOCKING ---
 		if (server->cursor_mode == TINYWL_CURSOR_MOVE && server->grabbed_toplevel != NULL) {
 			struct tinywl_toplevel *toplevel = server->grabbed_toplevel;
 			
-			// Dynamic output box fetching
 			struct wlr_box box;
 			wlr_output_layout_get_box(server->output_layout, NULL, &box);
 			int out_w = box.width > 0 ? box.width : 1920;
 			int out_h = box.height > 0 ? box.height : 1080;
             
-			if (server->last_hover == 1) { // Dropped on Left
+			if (server->last_hover == 1) { 
 				toplevel->docked_side = 1;
-				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720); // Internal scale
-				wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1); // Keep 1 pixel on screen so it doesn't suspend!
-				wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node); // Hide behind Flutter
+				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720); 
+				wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1); 
+				wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node); 
 				wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
                 wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
-			} else if (server->last_hover == 2) { // Dropped on Right
+			} else if (server->last_hover == 2) { 
 				toplevel->docked_side = 2;
 				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
 				wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1);
@@ -455,7 +449,6 @@ static void server_cursor_frame(struct wl_listener *listener, void *data) {
 	wlr_seat_pointer_notify_frame(server->seat);
 }
 
-// --- NEW RESIZE HANDLER: Updates Fullscreen & Workspace sizes on window resize ---
 static void server_layout_change(struct wl_listener *listener, void *data) {
 	struct tinywl_server *server = wl_container_of(listener, server, layout_change);
 	
@@ -467,7 +460,6 @@ static void server_layout_change(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel;
 	wl_list_for_each(toplevel, &server->toplevels, link) {
 		const char *app_id = toplevel->xdg_toplevel->app_id;
-		// If it's the Workspace app, OR a fully maximized/fullscreen app, force resize it dynamically.
 		if ((app_id && strstr(app_id, "workspace") != NULL) || toplevel->maximized || toplevel->xdg_toplevel->current.fullscreen) {
 			wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
 			wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
@@ -537,14 +529,12 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
 }
 
-// --- IPC BRIDGE: EXPORT FULL WORKSPACE STATE TO FLUTTER ---
 static void update_workspace_state(struct tinywl_server *server) {
 	FILE *f = fopen("/tmp/workspace_state.json", "w");
 	if (!f) return;
 
 	fprintf(f, "{\n  \"hover\": %d,\n", server->last_hover);
     
-	// 1. Active Windows (Undocked)
 	fprintf(f, "  \"active\": [\n");
 	bool first = true;
 	struct tinywl_toplevel *toplevel;
@@ -559,7 +549,6 @@ static void update_workspace_state(struct tinywl_server *server) {
 	}
 	fprintf(f, "\n  ],\n");
 
-	// 2. Docked Left
 	fprintf(f, "  \"docked_left\": [\n");
 	first = true;
 	wl_list_for_each(toplevel, &server->toplevels, link) {
@@ -573,7 +562,6 @@ static void update_workspace_state(struct tinywl_server *server) {
 	}
 	fprintf(f, "\n  ],\n");
 
-	// 3. Docked Right
 	fprintf(f, "  \"docked_right\": [\n");
 	first = true;
 	wl_list_for_each(toplevel, &server->toplevels, link) {
@@ -589,7 +577,6 @@ static void update_workspace_state(struct tinywl_server *server) {
 	fclose(f);
 }
 
-// --- IPC LISTENER TO DOCK/UNDOCK/MAXIMIZE FROM FLUTTER UI ---
 static int handle_dock_ipc(void *data) {
 	struct tinywl_server *server = data;
 	FILE *f = fopen("/tmp/dock_action.txt", "r");
@@ -609,7 +596,6 @@ static int handle_dock_ipc(void *data) {
 					if (strcmp(action, "DOCK_LEFT") == 0) {
 						toplevel->docked_side = 1;
 						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
-						// Keep at least 1 pixel on output so app doesn't suspend!
 						wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1); 
 						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
 						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
@@ -628,7 +614,7 @@ static int handle_dock_ipc(void *data) {
 							wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
 						} else {
 							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
-							wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); // Restore
+							wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); 
 						}
 						wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
 						focus_toplevel(toplevel);
@@ -675,47 +661,6 @@ static int handle_dock_ipc(void *data) {
 	return 0;
 }
 
-static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
-	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, map);
-	wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
-	toplevel->docked_side = 0; 
-
-	const char *app_id = toplevel->xdg_toplevel->app_id;
-	if (app_id != NULL && strstr(app_id, "workspace") != NULL) {
-		// DYNAMIC OUTPUT RESOLUTION ALLOCATION HERE
-		struct wlr_box box;
-		wlr_output_layout_get_box(toplevel->server->output_layout, NULL, &box);
-		int out_w = box.width > 0 ? box.width : 1920;
-		int out_h = box.height > 0 ? box.height : 1080;
-		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
-		wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
-		focus_toplevel(toplevel);
-		return; 
-	}
-
-	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
-	wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); 
-	focus_toplevel(toplevel);
-	update_workspace_state(toplevel->server);
-}
-
-static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
-	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
-	if (toplevel == toplevel->server->grabbed_toplevel) {
-		reset_cursor_mode(toplevel->server);
-	}
-    
-	if (toplevel->docked_side != 0) {
-		char filename[64];
-		snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
-		remove(filename);
-	}
-    
-	wl_list_remove(&toplevel->link);
-	update_workspace_state(toplevel->server);
-}
-
-// --- ROBUST THUMBNAIL EXTRACTOR (Fixed Stride + Atomic Writes) ---
 static void update_thumbnail(struct tinywl_toplevel *toplevel) {
 	if (toplevel->docked_side == 0) return;
 
@@ -740,10 +685,8 @@ static void update_thumbnail(struct tinywl_toplevel *toplevel) {
 			snprintf(tmp_filename, sizeof(tmp_filename), "/tmp/thumb_%p.tmp", (void*)toplevel);
 			snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
             
-			// 1. Write to a temporary file first (ATOMIC WRITE)
 			FILE *f = fopen(tmp_filename, "wb");
 			if (f) {
-				// Treat source as raw bytes so stride math is flawless
 				uint8_t *src8 = (uint8_t *)data;
 				uint32_t *dst32 = malloc(dst_width * dst_height * 4);
                 
@@ -752,12 +695,10 @@ static void update_thumbnail(struct tinywl_toplevel *toplevel) {
 						int src_y = y * src_height / dst_height;
 						uint32_t *dst_row = dst32 + (y * dst_width);
 						
-						// Step exactly 'stride' bytes per row to prevent diagonal glitches
 						uint8_t *src_row = src8 + (src_y * stride); 
 						
 						for (int x = 0; x < dst_width; x++) {
 							int src_x = x * src_width / dst_width;
-							// Extract the specific 32-bit pixel safely
 							dst_row[x] = *(uint32_t*)(src_row + (src_x * 4)); 
 						}
 					}
@@ -766,7 +707,6 @@ static void update_thumbnail(struct tinywl_toplevel *toplevel) {
 				}
 				fclose(f);
 				
-				// 2. Rename is atomic. Flutter will NEVER read a half-written file!
 				rename(tmp_filename, filename); 
 			}
 		}
@@ -774,15 +714,81 @@ static void update_thumbnail(struct tinywl_toplevel *toplevel) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// CRITICAL FIX: The initial configure commit
+// -------------------------------------------------------------------------
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, commit);
+	
 	if (toplevel->xdg_toplevel->base->initial_commit) {
-		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+		// If this is the FIRST app ever launched (the list is empty right now because mapping happens after)
+		// OR it specifically requested to be fullscreen:
+		if (wl_list_empty(&toplevel->server->toplevels) || toplevel->xdg_toplevel->requested.fullscreen) {
+			struct wlr_box box;
+			wlr_output_layout_get_box(toplevel->server->output_layout, NULL, &box);
+			wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, box.width > 0 ? box.width : 1920, box.height > 0 ? box.height : 1080);
+			wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true);
+		} else if (toplevel->xdg_toplevel->requested.maximized) {
+			struct wlr_box box;
+			wlr_output_layout_get_box(toplevel->server->output_layout, NULL, &box);
+			wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, box.width > 0 ? box.width : 1920, box.height > 0 ? box.height : 1080);
+			wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
+		} else {
+			// Leave size to 0,0 so standard windows pick their own size
+			wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+		}
 	}
     
 	if (toplevel->docked_side != 0) {
 		update_thumbnail(toplevel);
 	}
+}
+
+// -------------------------------------------------------------------------
+// CRITICAL FIX: The map function logic
+// -------------------------------------------------------------------------
+static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
+	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, map);
+	
+	// Add it to the list of windows
+	wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
+	toplevel->docked_side = 0; 
+
+	// Is this our workspace app (first in the list) OR is it a fullscreen app?
+	if (wl_list_length(&toplevel->server->toplevels) == 1 || toplevel->xdg_toplevel->requested.fullscreen) {
+		struct wlr_box box;
+		wlr_output_layout_get_box(toplevel->server->output_layout, NULL, &box);
+		int out_w = box.width > 0 ? box.width : 1920;
+		int out_h = box.height > 0 ? box.height : 1080;
+
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true); 
+		wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+	} else {
+		// Standard window layout
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
+		wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); 
+	}
+
+	wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	focus_toplevel(toplevel);
+	update_workspace_state(toplevel->server);
+}
+
+static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
+	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
+	if (toplevel == toplevel->server->grabbed_toplevel) {
+		reset_cursor_mode(toplevel->server);
+	}
+    
+	if (toplevel->docked_side != 0) {
+		char filename[64];
+		snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
+		remove(filename);
+	}
+    
+	wl_list_remove(&toplevel->link);
+	update_workspace_state(toplevel->server);
 }
 
 static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
@@ -824,31 +830,31 @@ static void begin_interactive(struct tinywl_toplevel *toplevel, enum tinywl_curs
 
 static void xdg_toplevel_request_move(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, request_move);
-	if (toplevel->xdg_toplevel->app_id != NULL && strstr(toplevel->xdg_toplevel->app_id, "workspace") != NULL) {
+	
+	// Check if this is our workspace background (the first window in the list)
+	struct tinywl_toplevel *first_toplevel = wl_container_of(toplevel->server->toplevels.prev, first_toplevel, link);
+	if (toplevel == first_toplevel || toplevel->xdg_toplevel->current.fullscreen) {
 		return; 
 	}
+	
 	begin_interactive(toplevel, TINYWL_CURSOR_MOVE, 0);
 }
 
 static void xdg_toplevel_request_resize(struct wl_listener *listener, void *data) {
 	struct wlr_xdg_toplevel_resize_event *event = data;
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, request_resize);
-	if (toplevel->xdg_toplevel->app_id != NULL && strstr(toplevel->xdg_toplevel->app_id, "workspace") != NULL) {
+	
+	struct tinywl_toplevel *first_toplevel = wl_container_of(toplevel->server->toplevels.prev, first_toplevel, link);
+	if (toplevel == first_toplevel || toplevel->xdg_toplevel->current.fullscreen) {
 		return; 
 	}
+	
 	begin_interactive(toplevel, TINYWL_CURSOR_RESIZE, event->edges);
 }
 
 static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, request_maximize);
 	
-	// CRITICAL FIX: Ignore maximize requests if the surface isn't fully initialized yet.
-	// Apps (especially GTK) requesting this on launch will crash wlroots otherwise.
-	if (!toplevel->xdg_toplevel->base->initialized) {
-		return;
-	}
-
-	// Native maximize via double-click titlebar/app request
 	bool maximize = toplevel->xdg_toplevel->requested.maximized;
 	if (maximize == toplevel->maximized) return;
 
@@ -876,17 +882,15 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *da
 		toplevel->maximized = false;
 	}
     
-	wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	if (toplevel->xdg_toplevel->base->initialized) {
+		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	}
 	update_workspace_state(toplevel->server);
 }
 
 static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, request_fullscreen);
 	
-	if (!toplevel->xdg_toplevel->base->initialized) {
-		return;
-	}
-
 	bool fullscreen = toplevel->xdg_toplevel->requested.fullscreen;
 	if (fullscreen) {
 		struct wlr_box box;
@@ -894,7 +898,6 @@ static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *
 		int out_w = box.width > 0 ? box.width : 1920;
 		int out_h = box.height > 0 ? box.height : 1080;
 
-		// Save current state to restore it later
 		toplevel->saved_x = toplevel->scene_tree->node.x;
 		toplevel->saved_y = toplevel->scene_tree->node.y;
 		toplevel->saved_geometry.width = toplevel->xdg_toplevel->base->geometry.width;
@@ -904,7 +907,6 @@ static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *
 		wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
 		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true);
 	} else {
-		// Restore geometry when leaving fullscreen
 		int width = toplevel->saved_geometry.width > 0 ? toplevel->saved_geometry.width : 800;
 		int height = toplevel->saved_geometry.height > 0 ? toplevel->saved_geometry.height : 600;
 
@@ -912,7 +914,10 @@ static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *
 		wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->saved_x, toplevel->saved_y);
 		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, false);
 	}
-	wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    
+	if (toplevel->xdg_toplevel->base->initialized) {
+		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	}
 }
 
 static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
@@ -1018,7 +1023,6 @@ int main(int argc, char *argv[]) {
 
 	server.output_layout = wlr_output_layout_create(server.wl_display);
 	
-	// --- BIND THE LAYOUT RESIZE LISTENER ---
 	server.layout_change.notify = server_layout_change;
 	wl_signal_add(&server.output_layout->events.change, &server.layout_change);
 
@@ -1073,11 +1077,9 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	// --- INIT OUR CUSTOM IPC EVENT TIMER FOR DOCK/UNDOCK ---
 	server.dock_ipc_timer = wl_event_loop_add_timer(wl_display_get_event_loop(server.wl_display), handle_dock_ipc, &server);
 	wl_event_source_timer_update(server.dock_ipc_timer, 100);
 
-	// --- CLEANUP PREVIOUS CRASH/SHUTDOWN STATE ---
 	system("rm -f /tmp/thumb_*.rgba /tmp/thumb_*.tmp /tmp/dock_action.txt"); 
 	update_workspace_state(&server); 
 
@@ -1102,7 +1104,7 @@ int main(int argc, char *argv[]) {
 	wl_list_remove(&server.request_cursor.link);
 	wl_list_remove(&server.request_set_selection.link);
 	wl_list_remove(&server.new_output.link);
-	wl_list_remove(&server.layout_change.link); // Clean up custom layout listener
+	wl_list_remove(&server.layout_change.link); 
 
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);

@@ -19,6 +19,9 @@ void main() async {
   );
 
   windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.setFullScreen(
+      true,
+    ); // Explicitly request Wayland Fullscreen
     await windowManager.show();
     await windowManager.focus();
   });
