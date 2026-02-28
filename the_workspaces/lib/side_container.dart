@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 class SidePanel extends StatefulWidget {
@@ -213,25 +214,44 @@ class _SidePanelState extends State<SidePanel> {
     String title = win['title'] ?? 'Unknown';
 
     return Container(
-      height: 250, // 200px for native window view + 50px for flutter footer
+      width: 290,
+      height: 250, // 200px for video + 50px for footer
       margin: const EdgeInsets.only(bottom: 20.0),
       decoration: BoxDecoration(
-        color: Colors.black26, // Base background
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white12),
+        color: const Color(0xFF1E1E2E),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.5),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
       child: Column(
         children: [
-          // 1. Placeholder space. The C Compositor will overlay the live Wayland window perfectly here.
-          const SizedBox(height: 200),
+          // 1. The Live Wayland Thumbnail
+          SizedBox(
+            height: 200,
+            width: 290,
+            child: ClipRRect(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(12),
+              ),
+              child: WindowThumbnail(windowId: win['id']!),
+            ),
+          ),
 
-          // 2. Flutter Footer (Will sit right beneath the live view)
+          // 2. The Flutter Footer
           Expanded(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: const BoxDecoration(
-                color: Colors.black45,
-                borderRadius: BorderRadius.vertical(bottom: Radius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.02),
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(12),
+                ),
               ),
               child: Row(
                 children: [
@@ -239,8 +259,8 @@ class _SidePanelState extends State<SidePanel> {
                     child: Text(
                       title,
                       style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w500,
                         fontSize: 13,
                       ),
                       maxLines: 1,
@@ -251,9 +271,9 @@ class _SidePanelState extends State<SidePanel> {
                     icon: const Icon(
                       Icons.open_in_new,
                       color: Colors.blueAccent,
-                      size: 20,
+                      size: 18,
                     ),
-                    tooltip: 'Undock App',
+                    tooltip: 'Undock & Restore',
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     onPressed: () {
@@ -266,6 +286,91 @@ class _SidePanelState extends State<SidePanel> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// --- NEW WIDGET: Live polling of the C Compositor's buffer ---
+class WindowThumbnail extends StatefulWidget {
+  final String windowId;
+
+  const WindowThumbnail({super.key, required this.windowId});
+
+  @override
+  State<WindowThumbnail> createState() => _WindowThumbnailState();
+}
+
+class _WindowThumbnailState extends State<WindowThumbnail> {
+  ui.Image? _image;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _startPolling();
+  }
+
+  void _startPolling() {
+    // Poll at ~30 FPS (every 33ms)
+    _timer = Timer.periodic(const Duration(milliseconds: 33), (_) async {
+      try {
+        final file = File('/tmp/thumb_${widget.windowId}.rgba');
+        if (await file.exists()) {
+          final bytes = await file.readAsBytes();
+
+          // Ensure file isn't mid-write (290 * 200 pixels * 4 bytes per pixel)
+          if (bytes.length == 290 * 200 * 4) {
+            ui.decodeImageFromPixels(
+              bytes,
+              290,
+              200,
+              ui
+                  .PixelFormat
+                  .bgra8888, // Standard Wayland DRM Little-Endian format (change to rgba8888 if colors are swapped)
+              (img) {
+                if (mounted) {
+                  final oldImage = _image;
+                  setState(() => _image = img);
+                  oldImage
+                      ?.dispose(); // Prevent memory leaks in the Flutter engine
+                }
+              },
+            );
+          }
+        }
+      } catch (e) {
+        // Suppress read lock errors while C is writing
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _image?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_image == null) {
+      return Container(
+        color: Colors.black45,
+        child: const Center(
+          child: CircularProgressIndicator(
+            color: Colors.white24,
+            strokeWidth: 2,
+          ),
+        ),
+      );
+    }
+
+    return RawImage(
+      image: _image,
+      width: 290,
+      height: 200,
+      fit: BoxFit.cover,
+      filterQuality: FilterQuality.high,
     );
   }
 }

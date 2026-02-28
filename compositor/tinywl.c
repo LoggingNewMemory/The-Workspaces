@@ -23,6 +23,7 @@
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_buffer.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -116,7 +117,6 @@ struct tinywl_keyboard {
 
 // Forward declaration for state updates
 static void update_workspace_state(struct tinywl_server *server);
-static void arrange_docked_windows(struct tinywl_server *server);
 
 static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 	if (toplevel == NULL) {
@@ -399,17 +399,25 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
             
 			if (server->last_hover == 1) { // Dropped on Left
 				toplevel->docked_side = 1;
+				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720); // Scale internally
+				wlr_scene_node_set_position(&toplevel->scene_tree->node, -10000, -10000); // Hide native window
 			} else if (server->last_hover == 2) { // Dropped on Right
 				toplevel->docked_side = 2;
+				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
+				wlr_scene_node_set_position(&toplevel->scene_tree->node, -10000, -10000);
 			} else {
 				// Dropped in the middle, UNDOCK!
 				if (toplevel->docked_side != 0) {
 					toplevel->docked_side = 0;
 					wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600); // Restore size
+                    
+					// Clean up SHM thumbnail
+					char filename[64];
+					snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
+					remove(filename);
 				}
 			}
             
-			arrange_docked_windows(server); // Apply layout
 			server->last_hover = 0;
 			update_workspace_state(server);
 		}
@@ -545,31 +553,6 @@ static void update_workspace_state(struct tinywl_server *server) {
 	fclose(f);
 }
 
-// --- LAYOUT ENGINE: Resize and position natively to match Flutter UI ---
-static void arrange_docked_windows(struct tinywl_server *server) {
-	// 94px leaves space for the Flutter "DOCK ACTIVE WINDOWS" header text
-	int start_y = 94; 
-	int stride = 270; // 200px window height + 50px footer + 20px margin
-	int left_idx = 0;
-	int right_idx = 0;
-
-	struct tinywl_toplevel *toplevel;
-	wl_list_for_each(toplevel, &server->toplevels, link) {
-		if (toplevel->docked_side == 1) { // Left panel
-			wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 290, 200);
-			wlr_scene_node_set_position(&toplevel->scene_tree->node, 24, start_y + (left_idx * stride));
-			wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
-			left_idx++;
-		} else if (toplevel->docked_side == 2) { // Right panel
-			wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 290, 200);
-			// 1920 (screen) - 340 (panel) + 24 (padding) = 1604
-			wlr_scene_node_set_position(&toplevel->scene_tree->node, 1604, start_y + (right_idx * stride));
-			wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
-			right_idx++;
-		}
-	}
-}
-
 // --- IPC LISTENER TO DOCK/UNDOCK FROM FLUTTER UI ---
 static int handle_dock_ipc(void *data) {
 	struct tinywl_server *server = data;
@@ -583,15 +566,24 @@ static int handle_dock_ipc(void *data) {
 				if ((void*)toplevel == id) {
 					if (strcmp(action, "DOCK_LEFT") == 0) {
 						toplevel->docked_side = 1;
+						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720); // Scale logic size
+						wlr_scene_node_set_position(&toplevel->scene_tree->node, -10000, -10000); // Hide native window
 					} else if (strcmp(action, "DOCK_RIGHT") == 0) {
 						toplevel->docked_side = 2;
+						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
+						wlr_scene_node_set_position(&toplevel->scene_tree->node, -10000, -10000);
 					} else if (strcmp(action, "UNDOCK") == 0) {
 						toplevel->docked_side = 0;
 						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
 						wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); // Restore to center floating
+                        
+						// Clean up the thumbnail file
+						char filename[64];
+						snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
+						remove(filename);
+                        
 						focus_toplevel(toplevel);
 					}
-					arrange_docked_windows(server); // Apply layout
 					update_workspace_state(server);
 					break;
 				}
@@ -630,15 +622,74 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	if (toplevel == toplevel->server->grabbed_toplevel) {
 		reset_cursor_mode(toplevel->server);
 	}
+	
+	if (toplevel->docked_side != 0) {
+		char filename[64];
+		snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
+		remove(filename);
+	}
+    
 	wl_list_remove(&toplevel->link);
-	arrange_docked_windows(toplevel->server); // Shift layout up
 	update_workspace_state(toplevel->server);
+}
+
+// --- FAST THUMBNAIL EXTRACTOR ---
+static void update_thumbnail(struct tinywl_toplevel *toplevel) {
+	if (toplevel->docked_side == 0) return;
+
+	struct wlr_surface *surface = toplevel->xdg_toplevel->base->surface;
+	if (!surface || !surface->buffer) return;
+
+	struct wlr_buffer *buffer = &surface->buffer->base;
+	void *data;
+	uint32_t format;
+	size_t stride;
+
+	// Request read access to the raw pixel buffer
+	if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &format, &stride)) {
+		int src_width = buffer->width;
+		int src_height = buffer->height;
+		int dst_width = 290;
+		int dst_height = 200;
+        
+		// Basic sanity check to ensure we are dealing with a 32-bit color format
+		if (stride >= src_width * 4) {
+			char filename[64];
+			snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
+            
+			FILE *f = fopen(filename, "wb");
+			if (f) {
+				uint32_t *src32 = (uint32_t *)data;
+				uint32_t *dst32 = malloc(dst_width * dst_height * 4);
+                
+				if (dst32) {
+					// Extremely fast Nearest-Neighbor scaling
+					for (int y = 0; y < dst_height; y++) {
+						int src_y = y * src_height / dst_height;
+						for (int x = 0; x < dst_width; x++) {
+							int src_x = x * src_width / dst_width;
+							dst32[y * dst_width + x] = src32[src_y * (stride / 4) + src_x];
+						}
+					}
+					fwrite(dst32, 1, dst_width * dst_height * 4, f);
+					free(dst32);
+				}
+				fclose(f);
+			}
+		}
+		wlr_buffer_end_data_ptr_access(buffer);
+	}
 }
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, commit);
 	if (toplevel->xdg_toplevel->base->initial_commit) {
 		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+	}
+
+	// Dump new pixels to the shared memory file if docked
+	if (toplevel->docked_side != 0) {
+		update_thumbnail(toplevel);
 	}
 }
 
