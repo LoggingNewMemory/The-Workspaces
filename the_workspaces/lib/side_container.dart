@@ -93,7 +93,7 @@ class _SidePanelState extends State<SidePanel> {
       child: DragTarget<Map>(
         onWillAccept: (data) => true,
         onAccept: (data) {
-          // Triggered ONLY if dragged from the Flutter bottom dock
+          // Triggered ONLY if dragged from the Flutter bottom dock or another side panel
           _sendDockAction(dockActionType, data['id']);
         },
         builder: (context, candidateData, rejectedData) {
@@ -173,7 +173,6 @@ class _SidePanelState extends State<SidePanel> {
                           else
                             Expanded(
                               child: ListView.builder(
-                                // Disable scrolling to maintain native compositor overlay alignment
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: containedWindows.length,
                                 itemBuilder: (context, index) {
@@ -211,12 +210,14 @@ class _SidePanelState extends State<SidePanel> {
   }
 
   Widget _buildListItem(Map win) {
-    String title = win['title'] ?? 'Unknown';
+    String title = win['title'] ?? '';
+    String className = win['name'] ?? 'Unknown App';
+    String displayText = title.isEmpty ? className : title;
 
-    return Container(
+    // Define the visual card
+    Widget card = Container(
       width: 290,
       height: 250, // 200px for video + 50px for footer
-      margin: const EdgeInsets.only(bottom: 20.0),
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E2E),
         borderRadius: BorderRadius.circular(12),
@@ -243,7 +244,7 @@ class _SidePanelState extends State<SidePanel> {
             ),
           ),
 
-          // 2. The Flutter Footer
+          // 2. Footer (App Name/Title + External Icon)
           Expanded(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -257,34 +258,54 @@ class _SidePanelState extends State<SidePanel> {
                 children: [
                   Expanded(
                     child: Text(
-                      title,
+                      displayText,
                       style: const TextStyle(
                         color: Colors.white70,
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
                         fontSize: 13,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(
-                      Icons.open_in_new,
-                      color: Colors.blueAccent,
-                      size: 18,
-                    ),
-                    tooltip: 'Undock & Restore',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: () {
-                      _sendDockAction('UNDOCK', win['id']!);
-                    },
+                  const SizedBox(width: 8),
+                  const Icon(
+                    Icons.open_in_new,
+                    color: Colors.blueAccent,
+                    size: 18,
                   ),
                 ],
               ),
             ),
           ),
         ],
+      ),
+    );
+
+    // Make the entire card Draggable to undock
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20.0),
+      child: Draggable<Map>(
+        data: win,
+        feedback: Material(
+          color:
+              Colors.transparent, // Prevents yellow text artifacts during drag
+          child: Opacity(
+            opacity: 0.85,
+            child: card, // Show the card floating under the cursor
+          ),
+        ),
+        childWhenDragging: Opacity(
+          opacity: 0.3, // Leave a faded ghost in the list while dragging
+          child: card,
+        ),
+        onDragEnd: (details) {
+          // If the card is dropped anywhere in the center workspace (not accepted by a target)
+          if (!details.wasAccepted) {
+            _sendDockAction('UNDOCK', win['id']!);
+          }
+        },
+        child: card, // Standard appearance when resting
       ),
     );
   }
@@ -326,13 +347,12 @@ class _WindowThumbnailState extends State<WindowThumbnail> {
               200,
               ui
                   .PixelFormat
-                  .bgra8888, // Standard Wayland DRM Little-Endian format (change to rgba8888 if colors are swapped)
+                  .bgra8888, // Standard Wayland DRM Little-Endian format
               (img) {
                 if (mounted) {
                   final oldImage = _image;
                   setState(() => _image = img);
-                  oldImage
-                      ?.dispose(); // Prevent memory leaks in the Flutter engine
+                  oldImage?.dispose(); // Prevent memory leaks in the engine
                 }
               },
             );
