@@ -172,6 +172,8 @@ class _SidePanelState extends State<SidePanel> {
                           else
                             Expanded(
                               child: ListView.builder(
+                                // Disable scrolling to maintain native compositor overlay alignment
+                                physics: const NeverScrollableScrollPhysics(),
                                 itemCount: containedWindows.length,
                                 itemBuilder: (context, index) {
                                   return _buildListItem(
@@ -209,50 +211,58 @@ class _SidePanelState extends State<SidePanel> {
 
   Widget _buildListItem(Map win) {
     String title = win['title'] ?? 'Unknown';
-    String className = win['name'] ?? 'unknown';
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12.0),
-      color: Colors.transparent,
-      child: Row(
+      height: 250, // 200px for native window view + 50px for flutter footer
+      margin: const EdgeInsets.only(bottom: 20.0),
+      decoration: BoxDecoration(
+        color: Colors.black26, // Base background
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
         children: [
-          const Icon(
-            Icons.branding_watermark_outlined,
-            color: Colors.white70,
-            size: 28,
-          ),
-          const SizedBox(width: 16),
+          // 1. Placeholder space. The C Compositor will overlay the live Wayland window perfectly here.
+          const SizedBox(height: 200),
+
+          // 2. Flutter Footer (Will sit right beneath the live view)
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title.isEmpty ? className : title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: const BoxDecoration(
+                color: Colors.black45,
+                borderRadius: BorderRadius.vertical(bottom: Radius.circular(8)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Class: ${className.toLowerCase()}',
-                  style: const TextStyle(color: Colors.white38, fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+                  IconButton(
+                    icon: const Icon(
+                      Icons.open_in_new,
+                      color: Colors.blueAccent,
+                      size: 20,
+                    ),
+                    tooltip: 'Undock App',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () {
+                      _sendDockAction('UNDOCK', win['id']!);
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.exit_to_app, color: Colors.blueAccent),
-            tooltip: 'Undock App',
-            onPressed: () {
-              _sendDockAction('UNDOCK', win['id']!);
-            },
           ),
         ],
       ),
