@@ -42,6 +42,8 @@ class _SidePanelState extends State<SidePanel> {
         final file = File('/tmp/workspace_state.json');
         if (await file.exists()) {
           final content = await file.readAsString();
+          if (content.isEmpty) return; // Prevent parsing empty file mid-write
+
           final decoded = jsonDecode(content);
 
           // 1. Check if compositor is dragging a window over our edge
@@ -52,7 +54,7 @@ class _SidePanelState extends State<SidePanel> {
 
           // 2. Parse docked windows for this side
           final List<dynamic> dockedData =
-              decoded[isLeft ? 'docked_left' : 'docked_right'];
+              decoded[isLeft ? 'docked_left' : 'docked_right'] ?? [];
           List<Map<String, String>> newWindows = dockedData
               .map(
                 (e) => {
@@ -68,7 +70,7 @@ class _SidePanelState extends State<SidePanel> {
           }
         }
       } catch (e) {
-        // Suppress read/parse errors during C file writes
+        // Suppress read/parse errors during C file writes safely
       }
     });
   }
@@ -76,8 +78,12 @@ class _SidePanelState extends State<SidePanel> {
   // Request to Undock OR to handle drags originating from the Flutter Dock UI
   void _sendDockAction(String action, String id) {
     try {
-      final file = File('/tmp/dock_action.txt');
-      file.writeAsStringSync('$action $id\n');
+      // Atomic file writing
+      final tmpFile = File(
+        '/tmp/dock_action_${DateTime.now().millisecondsSinceEpoch}.tmp',
+      );
+      tmpFile.writeAsStringSync('$action $id\n');
+      tmpFile.renameSync('/tmp/dock_action.txt');
     } catch (e) {
       debugPrint('Failed to send dock action: $e');
     }
@@ -311,7 +317,7 @@ class _SidePanelState extends State<SidePanel> {
   }
 }
 
-// --- NEW WIDGET: Live polling of the C Compositor's buffer ---
+// --- Live polling of the C Compositor's buffer ---
 class WindowThumbnail extends StatefulWidget {
   final String windowId;
 

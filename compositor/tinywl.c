@@ -313,8 +313,9 @@ static void process_cursor_move(struct tinywl_server *server) {
 	int out_width = box.width > 0 ? box.width : 1920;
 
 	int current_hover = 0;
-	if (server->cursor->x < 40) current_hover = 1;      
-	else if (server->cursor->x > out_width - 40) current_hover = 2; 
+	// Increased margin to 60px for a more reliable hit box
+	if (server->cursor->x < 60) current_hover = 1;      
+	else if (server->cursor->x > out_width - 60) current_hover = 2; 
 
 	if (server->last_hover != current_hover) {
 		server->last_hover = current_hover;
@@ -530,7 +531,8 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 }
 
 static void update_workspace_state(struct tinywl_server *server) {
-	FILE *f = fopen("/tmp/workspace_state.json", "w");
+	// ATOMIC WRITE: Write to a .tmp file first so Flutter doesn't parse a halfway-written JSON file
+	FILE *f = fopen("/tmp/workspace_state.tmp", "w");
 	if (!f) return;
 
 	fprintf(f, "{\n  \"hover\": %d,\n", server->last_hover);
@@ -575,87 +577,96 @@ static void update_workspace_state(struct tinywl_server *server) {
 	}
 	fprintf(f, "\n  ]\n}\n");
 	fclose(f);
+
+	// Atomic rename to ensure exact consistency
+	rename("/tmp/workspace_state.tmp", "/tmp/workspace_state.json");
 }
 
 static int handle_dock_ipc(void *data) {
 	struct tinywl_server *server = data;
-	FILE *f = fopen("/tmp/dock_action.txt", "r");
-	if (f) {
-		char action[32];
-		void *id = NULL;
-		if (fscanf(f, "%31s %p", action, &id) == 2) {
-			
-			struct wlr_box box;
-			wlr_output_layout_get_box(server->output_layout, NULL, &box);
-			int out_w = box.width > 0 ? box.width : 1920;
-			int out_h = box.height > 0 ? box.height : 1080;
+	
+	// ATOMIC READ: If the file exists, move it immediately so nothing else writes to it while we process
+	if (access("/tmp/dock_action.txt", F_OK) == 0) {
+		rename("/tmp/dock_action.txt", "/tmp/dock_action_processing.txt");
+		FILE *f = fopen("/tmp/dock_action_processing.txt", "r");
+		
+		if (f) {
+			char action[32];
+			void *id = NULL;
+			if (fscanf(f, "%31s %p", action, &id) == 2) {
+				
+				struct wlr_box box;
+				wlr_output_layout_get_box(server->output_layout, NULL, &box);
+				int out_w = box.width > 0 ? box.width : 1920;
+				int out_h = box.height > 0 ? box.height : 1080;
 
-			struct tinywl_toplevel *toplevel;
-			wl_list_for_each(toplevel, &server->toplevels, link) {
-				if ((void*)toplevel == id) {
-					if (strcmp(action, "DOCK_LEFT") == 0) {
-						toplevel->docked_side = 1;
-						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
-						wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1); 
-						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
-						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
-                        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
-					} else if (strcmp(action, "DOCK_RIGHT") == 0) {
-						toplevel->docked_side = 2;
-						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
-						wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1);
-						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
-						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
-                        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
-					} else if (strcmp(action, "UNDOCK") == 0) {
-						toplevel->docked_side = 0;
-						if (toplevel->maximized) {
-							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
-							wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
-						} else {
-							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
-							wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); 
-						}
-						wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
-						focus_toplevel(toplevel);
-                        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
-					} else if (strcmp(action, "MAXIMIZE") == 0) {
-						if (!toplevel->maximized) {
-							toplevel->saved_x = toplevel->scene_tree->node.x;
-							toplevel->saved_y = toplevel->scene_tree->node.y;
-							toplevel->saved_geometry.width = toplevel->xdg_toplevel->base->geometry.width;
-							if (toplevel->saved_geometry.width == 0) toplevel->saved_geometry.width = 800;
-							toplevel->saved_geometry.height = toplevel->xdg_toplevel->base->geometry.height;
-							if (toplevel->saved_geometry.height == 0) toplevel->saved_geometry.height = 600;
-
-							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
-							wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
-							wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
-							toplevel->maximized = true;
+				struct tinywl_toplevel *toplevel;
+				wl_list_for_each(toplevel, &server->toplevels, link) {
+					if ((void*)toplevel == id) {
+						if (strcmp(action, "DOCK_LEFT") == 0) {
+							toplevel->docked_side = 1;
+							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
+							wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1); 
+							wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
+							wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
+                            wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+						} else if (strcmp(action, "DOCK_RIGHT") == 0) {
+							toplevel->docked_side = 2;
+							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
+							wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1);
+							wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
+							wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
+                            wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+						} else if (strcmp(action, "UNDOCK") == 0) {
+							toplevel->docked_side = 0;
+							if (toplevel->maximized) {
+								wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
+								wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+							} else {
+								wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
+								wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); 
+							}
 							wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
 							focus_toplevel(toplevel);
                             wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+						} else if (strcmp(action, "MAXIMIZE") == 0) {
+							if (!toplevel->maximized) {
+								toplevel->saved_x = toplevel->scene_tree->node.x;
+								toplevel->saved_y = toplevel->scene_tree->node.y;
+								toplevel->saved_geometry.width = toplevel->xdg_toplevel->base->geometry.width;
+								if (toplevel->saved_geometry.width == 0) toplevel->saved_geometry.width = 800;
+								toplevel->saved_geometry.height = toplevel->xdg_toplevel->base->geometry.height;
+								if (toplevel->saved_geometry.height == 0) toplevel->saved_geometry.height = 600;
+
+								wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
+								wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+								wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
+								toplevel->maximized = true;
+								wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+								focus_toplevel(toplevel);
+                                wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+							}
+						} else if (strcmp(action, "RESTORE") == 0) {
+							if (toplevel->maximized) {
+								wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, toplevel->saved_geometry.width, toplevel->saved_geometry.height);
+								wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->saved_x, toplevel->saved_y);
+								wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+								toplevel->maximized = false;
+								wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+								focus_toplevel(toplevel);
+                                wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+							}
+						} else if (strcmp(action, "CLOSE") == 0) {
+							wlr_xdg_toplevel_send_close(toplevel->xdg_toplevel);
 						}
-					} else if (strcmp(action, "RESTORE") == 0) {
-						if (toplevel->maximized) {
-							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, toplevel->saved_geometry.width, toplevel->saved_geometry.height);
-							wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->saved_x, toplevel->saved_y);
-							wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
-							toplevel->maximized = false;
-							wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
-							focus_toplevel(toplevel);
-                            wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
-						}
-					} else if (strcmp(action, "CLOSE") == 0) {
-						wlr_xdg_toplevel_send_close(toplevel->xdg_toplevel);
+						update_workspace_state(server);
+						break;
 					}
-					update_workspace_state(server);
-					break;
 				}
 			}
+			fclose(f);
 		}
-		fclose(f);
-		remove("/tmp/dock_action.txt");
+		remove("/tmp/dock_action_processing.txt");
 	}
 	wl_event_source_timer_update(server->dock_ipc_timer, 100);
 	return 0;
@@ -1080,7 +1091,7 @@ int main(int argc, char *argv[]) {
 	server.dock_ipc_timer = wl_event_loop_add_timer(wl_display_get_event_loop(server.wl_display), handle_dock_ipc, &server);
 	wl_event_source_timer_update(server.dock_ipc_timer, 100);
 
-	system("rm -f /tmp/thumb_*.rgba /tmp/thumb_*.tmp /tmp/dock_action.txt"); 
+	system("rm -f /tmp/thumb_*.rgba /tmp/thumb_*.tmp /tmp/dock_action.txt /tmp/dock_action_processing.txt"); 
 	update_workspace_state(&server); 
 
 	setenv("WAYLAND_DISPLAY", socket, true);

@@ -86,8 +86,10 @@ class _DockPanelState extends State<DockPanel> {
         final file = File('/tmp/workspace_state.json');
         if (await file.exists()) {
           final content = await file.readAsString();
+          if (content.isEmpty) return;
+
           final decoded = jsonDecode(content);
-          final List<dynamic> activeData = decoded['active'];
+          final List<dynamic> activeData = decoded['active'] ?? [];
 
           List<Map<String, String>> newWindows = activeData
               .map(
@@ -110,11 +112,15 @@ class _DockPanelState extends State<DockPanel> {
     });
   }
 
-  // --- Trigger IPC action back to Compositor ---
+  // --- Trigger IPC action back to Compositor ATOMICALLY ---
   void _sendDockAction(String action, String id) {
     try {
-      final file = File('/tmp/dock_action.txt');
-      file.writeAsStringSync('$action $id\n');
+      // Write to temp file then rename to avoid race conditions with C reader
+      final tmpFile = File(
+        '/tmp/dock_action_${DateTime.now().millisecondsSinceEpoch}.tmp',
+      );
+      tmpFile.writeAsStringSync('$action $id\n');
+      tmpFile.renameSync('/tmp/dock_action.txt');
     } catch (e) {
       debugPrint('Failed to send dock action: $e');
     }
