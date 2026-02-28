@@ -409,12 +409,14 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 				wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079); // Keep 1 pixel on screen so it doesn't suspend!
 				wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node); // Hide behind Flutter
 				wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
+                wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 			} else if (server->last_hover == 2) { // Dropped on Right
 				toplevel->docked_side = 2;
 				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
 				wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079);
 				wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
 				wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
+                wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 			}
             
 			server->last_hover = 0;
@@ -573,12 +575,14 @@ static int handle_dock_ipc(void *data) {
 						wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079); 
 						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
 						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
+                        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 					} else if (strcmp(action, "DOCK_RIGHT") == 0) {
 						toplevel->docked_side = 2;
 						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
 						wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079);
 						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
 						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
+                        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 					} else if (strcmp(action, "UNDOCK") == 0) {
 						toplevel->docked_side = 0;
 						if (toplevel->maximized) {
@@ -590,6 +594,7 @@ static int handle_dock_ipc(void *data) {
 						}
 						wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
 						focus_toplevel(toplevel);
+                        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 					} else if (strcmp(action, "MAXIMIZE") == 0) {
 						if (!toplevel->maximized) {
 							toplevel->saved_x = toplevel->scene_tree->node.x;
@@ -605,6 +610,7 @@ static int handle_dock_ipc(void *data) {
 							toplevel->maximized = true;
 							wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
 							focus_toplevel(toplevel);
+                            wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 						}
 					} else if (strcmp(action, "RESTORE") == 0) {
 						if (toplevel->maximized) {
@@ -614,6 +620,7 @@ static int handle_dock_ipc(void *data) {
 							toplevel->maximized = false;
 							wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
 							focus_toplevel(toplevel);
+                            wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 						}
 					} else if (strcmp(action, "CLOSE") == 0) {
 						wlr_xdg_toplevel_send_close(toplevel->xdg_toplevel);
