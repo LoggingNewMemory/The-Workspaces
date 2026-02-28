@@ -97,6 +97,12 @@ struct tinywl_toplevel {
 	struct wl_listener request_fullscreen;
     
 	int docked_side; // 0 = not docked, 1 = left, 2 = right
+    
+	// Maximize State Tracking
+	bool maximized;
+	double saved_x;
+	double saved_y;
+	struct wlr_box saved_geometry;
 };
 
 struct tinywl_popup {
@@ -513,7 +519,8 @@ static void update_workspace_state(struct tinywl_server *server) {
 		if (strstr(app_id, "workspace") != NULL || toplevel->docked_side != 0) continue;
 		if (!first) fprintf(f, ",\n");
 		const char *title = toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title : "Unknown Window";
-		fprintf(f, "    { \"id\": \"%p\", \"name\": \"%s\", \"title\": \"%s\" }", (void*)toplevel, app_id, title);
+		fprintf(f, "    { \"id\": \"%p\", \"name\": \"%s\", \"title\": \"%s\", \"maximized\": %s }", 
+            (void*)toplevel, app_id, title, toplevel->maximized ? "true" : "false");
 		first = false;
 	}
 	fprintf(f, "\n  ],\n");
@@ -526,7 +533,8 @@ static void update_workspace_state(struct tinywl_server *server) {
 		const char *app_id = toplevel->xdg_toplevel->app_id ? toplevel->xdg_toplevel->app_id : "Unknown";
 		const char *title = toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title : "Unknown Window";
 		if (!first) fprintf(f, ",\n");
-		fprintf(f, "    { \"id\": \"%p\", \"name\": \"%s\", \"title\": \"%s\" }", (void*)toplevel, app_id, title);
+		fprintf(f, "    { \"id\": \"%p\", \"name\": \"%s\", \"title\": \"%s\", \"maximized\": %s }", 
+            (void*)toplevel, app_id, title, toplevel->maximized ? "true" : "false");
 		first = false;
 	}
 	fprintf(f, "\n  ],\n");
@@ -539,14 +547,15 @@ static void update_workspace_state(struct tinywl_server *server) {
 		const char *app_id = toplevel->xdg_toplevel->app_id ? toplevel->xdg_toplevel->app_id : "Unknown";
 		const char *title = toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title : "Unknown Window";
 		if (!first) fprintf(f, ",\n");
-		fprintf(f, "    { \"id\": \"%p\", \"name\": \"%s\", \"title\": \"%s\" }", (void*)toplevel, app_id, title);
+		fprintf(f, "    { \"id\": \"%p\", \"name\": \"%s\", \"title\": \"%s\", \"maximized\": %s }", 
+            (void*)toplevel, app_id, title, toplevel->maximized ? "true" : "false");
 		first = false;
 	}
 	fprintf(f, "\n  ]\n}\n");
 	fclose(f);
 }
 
-// --- IPC LISTENER TO DOCK/UNDOCK FROM FLUTTER UI ---
+// --- IPC LISTENER TO DOCK/UNDOCK/MAXIMIZE FROM FLUTTER UI ---
 static int handle_dock_ipc(void *data) {
 	struct tinywl_server *server = data;
 	FILE *f = fopen("/tmp/dock_action.txt", "r");
@@ -572,10 +581,42 @@ static int handle_dock_ipc(void *data) {
 						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
 					} else if (strcmp(action, "UNDOCK") == 0) {
 						toplevel->docked_side = 0;
-						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
-						wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); // Restore
+						if (toplevel->maximized) {
+							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+							wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+						} else {
+							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
+							wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); // Restore
+						}
 						wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
 						focus_toplevel(toplevel);
+					} else if (strcmp(action, "MAXIMIZE") == 0) {
+						if (!toplevel->maximized) {
+							toplevel->saved_x = toplevel->scene_tree->node.x;
+							toplevel->saved_y = toplevel->scene_tree->node.y;
+							toplevel->saved_geometry.width = toplevel->xdg_toplevel->base->geometry.width;
+							if (toplevel->saved_geometry.width == 0) toplevel->saved_geometry.width = 800;
+							toplevel->saved_geometry.height = toplevel->xdg_toplevel->base->geometry.height;
+							if (toplevel->saved_geometry.height == 0) toplevel->saved_geometry.height = 600;
+
+							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+							wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+							wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
+							toplevel->maximized = true;
+							wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+							focus_toplevel(toplevel);
+						}
+					} else if (strcmp(action, "RESTORE") == 0) {
+						if (toplevel->maximized) {
+							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, toplevel->saved_geometry.width, toplevel->saved_geometry.height);
+							wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->saved_x, toplevel->saved_y);
+							wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+							toplevel->maximized = false;
+							wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+							focus_toplevel(toplevel);
+						}
+					} else if (strcmp(action, "CLOSE") == 0) {
+						wlr_xdg_toplevel_send_close(toplevel->xdg_toplevel);
 					}
 					update_workspace_state(server);
 					break;
@@ -750,9 +791,38 @@ static void xdg_toplevel_request_resize(struct wl_listener *listener, void *data
 
 static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, request_maximize);
-	if (toplevel->xdg_toplevel->base->initialized) {
-		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	
+	// CRITICAL FIX: Ignore maximize requests if the surface isn't fully initialized yet.
+	// Apps (especially GTK) requesting this on launch will crash wlroots otherwise.
+	if (!toplevel->xdg_toplevel->base->initialized) {
+		return;
 	}
+
+	// Native maximize via double-click titlebar/app request
+	bool maximize = toplevel->xdg_toplevel->requested.maximized;
+	if (maximize == toplevel->maximized) return;
+
+	if (maximize) {
+		toplevel->saved_x = toplevel->scene_tree->node.x;
+		toplevel->saved_y = toplevel->scene_tree->node.y;
+		toplevel->saved_geometry.width = toplevel->xdg_toplevel->base->geometry.width;
+		if (toplevel->saved_geometry.width == 0) toplevel->saved_geometry.width = 800;
+		toplevel->saved_geometry.height = toplevel->xdg_toplevel->base->geometry.height;
+		if (toplevel->saved_geometry.height == 0) toplevel->saved_geometry.height = 600;
+
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+		wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
+		toplevel->maximized = true;
+	} else {
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, toplevel->saved_geometry.width, toplevel->saved_geometry.height);
+		wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->saved_x, toplevel->saved_y);
+		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+		toplevel->maximized = false;
+	}
+    
+	wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	update_workspace_state(toplevel->server);
 }
 
 static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *data) {

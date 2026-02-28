@@ -95,6 +95,7 @@ class _DockPanelState extends State<DockPanel> {
                   'id': e['id'].toString(),
                   'name': e['name'].toString(),
                   'title': e['title'].toString(),
+                  'maximized': (e['maximized'] ?? false).toString(),
                 },
               )
               .toList();
@@ -109,6 +110,16 @@ class _DockPanelState extends State<DockPanel> {
     });
   }
 
+  // --- Trigger IPC action back to Compositor ---
+  void _sendDockAction(String action, String id) {
+    try {
+      final file = File('/tmp/dock_action.txt');
+      file.writeAsStringSync('$action $id\n');
+    } catch (e) {
+      debugPrint('Failed to send dock action: $e');
+    }
+  }
+
   // --- Load Installed Apps ---
   Future<void> _loadLinuxApps() async {
     List<AppInfo> parsedApps = [];
@@ -119,7 +130,7 @@ class _DockPanelState extends State<DockPanel> {
       Directory('$home/.local/share/applications'),
       Directory('/var/lib/flatpak/exports/share/applications'),
       Directory('$home/.local/share/flatpak/exports/share/applications'),
-      Directory('/var/lib/snapd/desktop/applications'), // Added Snap back
+      Directory('/var/lib/snapd/desktop/applications'),
     ];
 
     for (var dir in appDirs) {
@@ -174,10 +185,8 @@ class _DockPanelState extends State<DockPanel> {
     if (iconName == null || iconName.isEmpty)
       return {'path': null, 'isSvg': false};
 
-    // Return cached result immediately
     if (_iconCache.containsKey(iconName)) return _iconCache[iconName]!;
 
-    // 1. Absolute Paths
     if (iconName.startsWith('/')) {
       if (File(iconName).existsSync()) {
         final result = {
@@ -203,7 +212,6 @@ class _DockPanelState extends State<DockPanel> {
     final List<String> targetThemes = [_activeIconTheme];
     if (_activeIconTheme != 'hicolor') targetThemes.add('hicolor');
 
-    // Re-expanded bases to include Snap
     final List<String> bases = [
       '$home/.local/share/icons',
       '/usr/share/icons',
@@ -211,7 +219,6 @@ class _DockPanelState extends State<DockPanel> {
       '/snap/current/usr/share/icons',
     ];
 
-    // Re-expanded sizes to catch high-res only apps (like Arduino/scrcpy)
     final List<String> sizes = [
       'scalable',
       '512x512',
@@ -227,7 +234,6 @@ class _DockPanelState extends State<DockPanel> {
       '16x16',
     ];
 
-    // Re-expanded categories to catch system tools (like Avahi)
     final List<String> categories = [
       'apps',
       'actions',
@@ -239,7 +245,6 @@ class _DockPanelState extends State<DockPanel> {
       'panel',
     ];
 
-    // 2. Search targeted XDG Themes
     for (var theme in targetThemes) {
       for (var base in bases) {
         for (var size in sizes) {
@@ -248,7 +253,7 @@ class _DockPanelState extends State<DockPanel> {
               String path = '$base/$theme/$size/$category/$baseName$ext';
               if (File(path).existsSync()) {
                 final result = {'path': path, 'isSvg': ext == '.svg'};
-                _iconCache[iconName] = result; // Cache it
+                _iconCache[iconName] = result;
                 return result;
               }
             }
@@ -257,7 +262,6 @@ class _DockPanelState extends State<DockPanel> {
       }
     }
 
-    // 3. Fallback: /usr/share/pixmaps (Legacy /opt/ apps)
     for (var ext in extensions) {
       String path = '/usr/share/pixmaps/$baseName$ext';
       if (File(path).existsSync()) {
@@ -267,7 +271,6 @@ class _DockPanelState extends State<DockPanel> {
       }
     }
 
-    // 4. Desperate Fallback: Check root of icon directories (rare, but happens)
     for (var base in bases) {
       for (var ext in extensions) {
         String path = '$base/$baseName$ext';
@@ -344,45 +347,109 @@ class _DockPanelState extends State<DockPanel> {
                     ),
                     itemCount: totalItems,
                     itemBuilder: (context, index) {
+                      // 1. ACTIVE WINDOWS
                       if (index < activeWindows.length) {
                         final win = activeWindows[index];
+                        final isMaximized = win['maximized'] == 'true';
+
                         Widget activeIcon = Container(
                           width: 60,
                           height: 60,
                           margin: const EdgeInsets.symmetric(horizontal: 6),
                           decoration: BoxDecoration(
-                            color: Colors.blueAccent.withOpacity(0.2),
+                            color: isMaximized
+                                ? Colors.greenAccent.withOpacity(0.2)
+                                : Colors.blueAccent.withOpacity(0.2),
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
-                              color: Colors.blueAccent,
+                              color: isMaximized
+                                  ? Colors.greenAccent
+                                  : Colors.blueAccent,
                               width: 2,
                             ),
                           ),
                           child: Center(
                             child: Text(
                               win['name']!.substring(0, 1).toUpperCase(),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 24,
-                                color: Colors.blueAccent,
+                                color: isMaximized
+                                    ? Colors.greenAccent
+                                    : Colors.blueAccent,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                           ),
                         );
 
-                        return Tooltip(
-                          message: "Active: ${win['title']}",
-                          child: Draggable<Map>(
-                            data: win,
-                            feedback: Opacity(opacity: 0.8, child: activeIcon),
-                            childWhenDragging: Opacity(
-                              opacity: 0.3,
+                        return GestureDetector(
+                          // Adding Context Menu Support
+                          onSecondaryTapDown: (details) {
+                            showMenu(
+                              context: context,
+                              color: const Color(0xFF1E1E2E),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              position: RelativeRect.fromLTRB(
+                                details.globalPosition.dx,
+                                details.globalPosition.dy - 120,
+                                details.globalPosition.dx + 1,
+                                details.globalPosition.dy,
+                              ),
+                              items: [
+                                PopupMenuItem(
+                                  child: Text(
+                                    isMaximized
+                                        ? 'Restore Window'
+                                        : 'Maximize Window',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  onTap: () {
+                                    _sendDockAction(
+                                      isMaximized ? 'RESTORE' : 'MAXIMIZE',
+                                      win['id']!,
+                                    );
+                                  },
+                                ),
+                                PopupMenuItem(
+                                  child: const Text(
+                                    'Close App',
+                                    style: TextStyle(
+                                      color: Colors.redAccent,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  onTap: () {
+                                    _sendDockAction('CLOSE', win['id']!);
+                                  },
+                                ),
+                              ],
+                            );
+                          },
+                          child: Tooltip(
+                            message:
+                                "Active: ${win['title']} ${isMaximized ? '(Maximized)' : ''}\nRight-click for options.",
+                            child: Draggable<Map>(
+                              data: win,
+                              feedback: Opacity(
+                                opacity: 0.8,
+                                child: activeIcon,
+                              ),
+                              childWhenDragging: Opacity(
+                                opacity: 0.3,
+                                child: activeIcon,
+                              ),
                               child: activeIcon,
                             ),
-                            child: activeIcon,
                           ),
                         );
-                      } else if (index == activeWindows.length &&
+                      }
+                      // 2. DIVIDER
+                      else if (index == activeWindows.length &&
                           activeWindows.isNotEmpty) {
                         return const Padding(
                           padding: EdgeInsets.symmetric(horizontal: 16.0),
@@ -391,7 +458,9 @@ class _DockPanelState extends State<DockPanel> {
                             thickness: 2,
                           ),
                         );
-                      } else {
+                      }
+                      // 3. LAUNCHABLE APPS
+                      else {
                         int appIndex =
                             index -
                             activeWindows.length -
