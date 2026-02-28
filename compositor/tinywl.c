@@ -399,23 +399,16 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
             
 			if (server->last_hover == 1) { // Dropped on Left
 				toplevel->docked_side = 1;
-				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720); // Scale internally
-				wlr_scene_node_set_position(&toplevel->scene_tree->node, -10000, -10000); // Hide native window
+				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720); // Internal scale
+				wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079); // Keep 1 pixel on screen so it doesn't suspend!
+				wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node); // Hide behind Flutter
+				wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
 			} else if (server->last_hover == 2) { // Dropped on Right
 				toplevel->docked_side = 2;
 				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
-				wlr_scene_node_set_position(&toplevel->scene_tree->node, -10000, -10000);
-			} else {
-				// Dropped in the middle, UNDOCK!
-				if (toplevel->docked_side != 0) {
-					toplevel->docked_side = 0;
-					wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600); // Restore size
-                    
-					// Clean up SHM thumbnail
-					char filename[64];
-					snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
-					remove(filename);
-				}
+				wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079);
+				wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
+				wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
 			}
             
 			server->last_hover = 0;
@@ -566,22 +559,22 @@ static int handle_dock_ipc(void *data) {
 				if ((void*)toplevel == id) {
 					if (strcmp(action, "DOCK_LEFT") == 0) {
 						toplevel->docked_side = 1;
-						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720); // Scale logic size
-						wlr_scene_node_set_position(&toplevel->scene_tree->node, -10000, -10000); // Hide native window
+						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
+						// Keep at least 1 pixel on output so app doesn't suspend!
+						wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079); 
+						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
+						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
 					} else if (strcmp(action, "DOCK_RIGHT") == 0) {
 						toplevel->docked_side = 2;
 						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
-						wlr_scene_node_set_position(&toplevel->scene_tree->node, -10000, -10000);
+						wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079);
+						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
+						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
 					} else if (strcmp(action, "UNDOCK") == 0) {
 						toplevel->docked_side = 0;
 						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
-						wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); // Restore to center floating
-                        
-						// Clean up the thumbnail file
-						char filename[64];
-						snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
-						remove(filename);
-                        
+						wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); // Restore
+						wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
 						focus_toplevel(toplevel);
 					}
 					update_workspace_state(server);
@@ -609,10 +602,8 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 		return; 
 	}
 
-	// Default Float Center
 	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
 	wlr_scene_node_set_position(&toplevel->scene_tree->node, 560, 240); 
-
 	focus_toplevel(toplevel);
 	update_workspace_state(toplevel->server);
 }
@@ -622,7 +613,7 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	if (toplevel == toplevel->server->grabbed_toplevel) {
 		reset_cursor_mode(toplevel->server);
 	}
-	
+    
 	if (toplevel->docked_side != 0) {
 		char filename[64];
 		snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
@@ -633,7 +624,7 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	update_workspace_state(toplevel->server);
 }
 
-// --- FAST THUMBNAIL EXTRACTOR ---
+// --- ROBUST THUMBNAIL EXTRACTOR (Fixed Stride + Atomic Writes) ---
 static void update_thumbnail(struct tinywl_toplevel *toplevel) {
 	if (toplevel->docked_side == 0) return;
 
@@ -641,40 +632,51 @@ static void update_thumbnail(struct tinywl_toplevel *toplevel) {
 	if (!surface || !surface->buffer) return;
 
 	struct wlr_buffer *buffer = &surface->buffer->base;
+	
 	void *data;
 	uint32_t format;
 	size_t stride;
 
-	// Request read access to the raw pixel buffer
 	if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &format, &stride)) {
 		int src_width = buffer->width;
 		int src_height = buffer->height;
 		int dst_width = 290;
 		int dst_height = 200;
         
-		// Basic sanity check to ensure we are dealing with a 32-bit color format
 		if (stride >= src_width * 4) {
+			char tmp_filename[64];
 			char filename[64];
+			snprintf(tmp_filename, sizeof(tmp_filename), "/tmp/thumb_%p.tmp", (void*)toplevel);
 			snprintf(filename, sizeof(filename), "/tmp/thumb_%p.rgba", (void*)toplevel);
             
-			FILE *f = fopen(filename, "wb");
+			// 1. Write to a temporary file first (ATOMIC WRITE)
+			FILE *f = fopen(tmp_filename, "wb");
 			if (f) {
-				uint32_t *src32 = (uint32_t *)data;
+				// Treat source as raw bytes so stride math is flawless
+				uint8_t *src8 = (uint8_t *)data;
 				uint32_t *dst32 = malloc(dst_width * dst_height * 4);
                 
 				if (dst32) {
-					// Extremely fast Nearest-Neighbor scaling
 					for (int y = 0; y < dst_height; y++) {
 						int src_y = y * src_height / dst_height;
+						uint32_t *dst_row = dst32 + (y * dst_width);
+						
+						// Step exactly 'stride' bytes per row to prevent diagonal glitches
+						uint8_t *src_row = src8 + (src_y * stride); 
+						
 						for (int x = 0; x < dst_width; x++) {
 							int src_x = x * src_width / dst_width;
-							dst32[y * dst_width + x] = src32[src_y * (stride / 4) + src_x];
+							// Extract the specific 32-bit pixel safely
+							dst_row[x] = *(uint32_t*)(src_row + (src_x * 4)); 
 						}
 					}
 					fwrite(dst32, 1, dst_width * dst_height * 4, f);
 					free(dst32);
 				}
 				fclose(f);
+				
+				// 2. Rename is atomic. Flutter will NEVER read a half-written file!
+				rename(tmp_filename, filename); 
 			}
 		}
 		wlr_buffer_end_data_ptr_access(buffer);
@@ -686,8 +688,7 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 	if (toplevel->xdg_toplevel->base->initial_commit) {
 		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
 	}
-
-	// Dump new pixels to the shared memory file if docked
+    
 	if (toplevel->docked_side != 0) {
 		update_thumbnail(toplevel);
 	}
@@ -917,6 +918,10 @@ int main(int argc, char *argv[]) {
 	// --- INIT OUR CUSTOM IPC EVENT TIMER FOR DOCK/UNDOCK ---
 	server.dock_ipc_timer = wl_event_loop_add_timer(wl_display_get_event_loop(server.wl_display), handle_dock_ipc, &server);
 	wl_event_source_timer_update(server.dock_ipc_timer, 100);
+
+	// --- CLEANUP PREVIOUS CRASH/SHUTDOWN STATE ---
+	system("rm -f /tmp/thumb_*.rgba /tmp/thumb_*.tmp /tmp/dock_action.txt"); 
+	update_workspace_state(&server); 
 
 	setenv("WAYLAND_DISPLAY", socket, true);
 	if (startup_cmd) {
