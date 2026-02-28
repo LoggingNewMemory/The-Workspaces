@@ -66,6 +66,7 @@ struct tinywl_server {
 	uint32_t resize_edges;
 
 	struct wlr_output_layout *output_layout;
+	struct wl_listener layout_change; // <-- Added listener for output resizing
 	struct wl_list outputs;
 	struct wl_listener new_output;
     
@@ -309,10 +310,15 @@ static void process_cursor_move(struct tinywl_server *server) {
 		server->cursor->x - server->grab_x,
 		server->cursor->y - server->grab_y);
 
+	// Fetch dynamic output width for accurate hovering
+	struct wlr_box box;
+	wlr_output_layout_get_box(server->output_layout, NULL, &box);
+	int out_width = box.width > 0 ? box.width : 1920;
+
 	// --- NATIVE EDGE HOVER DETECTION ---
 	int current_hover = 0;
 	if (server->cursor->x < 40) current_hover = 1;       // Left Edge
-	else if (server->cursor->x > 1880) current_hover = 2; // Right Edge (Assuming 1920 width)
+	else if (server->cursor->x > out_width - 40) current_hover = 2; // Right Edge
 
 	if (server->last_hover != current_hover) {
 		server->last_hover = current_hover;
@@ -402,18 +408,24 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 		// --- NATIVE DRAG & DROP DOCKING ---
 		if (server->cursor_mode == TINYWL_CURSOR_MOVE && server->grabbed_toplevel != NULL) {
 			struct tinywl_toplevel *toplevel = server->grabbed_toplevel;
+			
+			// Dynamic output box fetching
+			struct wlr_box box;
+			wlr_output_layout_get_box(server->output_layout, NULL, &box);
+			int out_w = box.width > 0 ? box.width : 1920;
+			int out_h = box.height > 0 ? box.height : 1080;
             
 			if (server->last_hover == 1) { // Dropped on Left
 				toplevel->docked_side = 1;
 				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720); // Internal scale
-				wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079); // Keep 1 pixel on screen so it doesn't suspend!
+				wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1); // Keep 1 pixel on screen so it doesn't suspend!
 				wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node); // Hide behind Flutter
 				wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
                 wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 			} else if (server->last_hover == 2) { // Dropped on Right
 				toplevel->docked_side = 2;
 				wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
-				wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079);
+				wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1);
 				wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
 				wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
                 wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
@@ -441,6 +453,26 @@ static void server_cursor_axis(struct wl_listener *listener, void *data) {
 static void server_cursor_frame(struct wl_listener *listener, void *data) {
 	struct tinywl_server *server = wl_container_of(listener, server, cursor_frame);
 	wlr_seat_pointer_notify_frame(server->seat);
+}
+
+// --- NEW RESIZE HANDLER: Updates Fullscreen & Workspace sizes on window resize ---
+static void server_layout_change(struct wl_listener *listener, void *data) {
+	struct tinywl_server *server = wl_container_of(listener, server, layout_change);
+	
+	struct wlr_box box;
+	wlr_output_layout_get_box(server->output_layout, NULL, &box);
+	int out_w = box.width > 0 ? box.width : 1920;
+	int out_h = box.height > 0 ? box.height : 1080;
+
+	struct tinywl_toplevel *toplevel;
+	wl_list_for_each(toplevel, &server->toplevels, link) {
+		const char *app_id = toplevel->xdg_toplevel->app_id;
+		// If it's the Workspace app, OR a fully maximized/fullscreen app, force resize it dynamically.
+		if ((app_id && strstr(app_id, "workspace") != NULL) || toplevel->maximized || toplevel->xdg_toplevel->current.fullscreen) {
+			wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
+			wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+		}
+	}
 }
 
 static void output_frame(struct wl_listener *listener, void *data) {
@@ -565,6 +597,12 @@ static int handle_dock_ipc(void *data) {
 		char action[32];
 		void *id = NULL;
 		if (fscanf(f, "%31s %p", action, &id) == 2) {
+			
+			struct wlr_box box;
+			wlr_output_layout_get_box(server->output_layout, NULL, &box);
+			int out_w = box.width > 0 ? box.width : 1920;
+			int out_h = box.height > 0 ? box.height : 1080;
+
 			struct tinywl_toplevel *toplevel;
 			wl_list_for_each(toplevel, &server->toplevels, link) {
 				if ((void*)toplevel == id) {
@@ -572,21 +610,21 @@ static int handle_dock_ipc(void *data) {
 						toplevel->docked_side = 1;
 						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
 						// Keep at least 1 pixel on output so app doesn't suspend!
-						wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079); 
+						wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1); 
 						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
 						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
                         wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 					} else if (strcmp(action, "DOCK_RIGHT") == 0) {
 						toplevel->docked_side = 2;
 						wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1280, 720);
-						wlr_scene_node_set_position(&toplevel->scene_tree->node, 1919, 1079);
+						wlr_scene_node_set_position(&toplevel->scene_tree->node, out_w - 1, out_h - 1);
 						wlr_scene_node_lower_to_bottom(&toplevel->scene_tree->node);
 						wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
                         wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 					} else if (strcmp(action, "UNDOCK") == 0) {
 						toplevel->docked_side = 0;
 						if (toplevel->maximized) {
-							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
 							wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
 						} else {
 							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 800, 600);
@@ -604,7 +642,7 @@ static int handle_dock_ipc(void *data) {
 							toplevel->saved_geometry.height = toplevel->xdg_toplevel->base->geometry.height;
 							if (toplevel->saved_geometry.height == 0) toplevel->saved_geometry.height = 600;
 
-							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+							wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
 							wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
 							wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
 							toplevel->maximized = true;
@@ -644,7 +682,12 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 
 	const char *app_id = toplevel->xdg_toplevel->app_id;
 	if (app_id != NULL && strstr(app_id, "workspace") != NULL) {
-		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+		// DYNAMIC OUTPUT RESOLUTION ALLOCATION HERE
+		struct wlr_box box;
+		wlr_output_layout_get_box(toplevel->server->output_layout, NULL, &box);
+		int out_w = box.width > 0 ? box.width : 1920;
+		int out_h = box.height > 0 ? box.height : 1080;
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
 		wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
 		focus_toplevel(toplevel);
 		return; 
@@ -810,6 +853,11 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *da
 	if (maximize == toplevel->maximized) return;
 
 	if (maximize) {
+		struct wlr_box box;
+		wlr_output_layout_get_box(toplevel->server->output_layout, NULL, &box);
+		int out_w = box.width > 0 ? box.width : 1920;
+		int out_h = box.height > 0 ? box.height : 1080;
+
 		toplevel->saved_x = toplevel->scene_tree->node.x;
 		toplevel->saved_y = toplevel->scene_tree->node.y;
 		toplevel->saved_geometry.width = toplevel->xdg_toplevel->base->geometry.width;
@@ -817,7 +865,7 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *da
 		toplevel->saved_geometry.height = toplevel->xdg_toplevel->base->geometry.height;
 		if (toplevel->saved_geometry.height == 0) toplevel->saved_geometry.height = 600;
 
-		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
 		wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
 		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
 		toplevel->maximized = true;
@@ -834,9 +882,37 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *da
 
 static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, request_fullscreen);
-	if (toplevel->xdg_toplevel->base->initialized) {
-		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	
+	if (!toplevel->xdg_toplevel->base->initialized) {
+		return;
 	}
+
+	bool fullscreen = toplevel->xdg_toplevel->requested.fullscreen;
+	if (fullscreen) {
+		struct wlr_box box;
+		wlr_output_layout_get_box(toplevel->server->output_layout, NULL, &box);
+		int out_w = box.width > 0 ? box.width : 1920;
+		int out_h = box.height > 0 ? box.height : 1080;
+
+		// Save current state to restore it later
+		toplevel->saved_x = toplevel->scene_tree->node.x;
+		toplevel->saved_y = toplevel->scene_tree->node.y;
+		toplevel->saved_geometry.width = toplevel->xdg_toplevel->base->geometry.width;
+		toplevel->saved_geometry.height = toplevel->xdg_toplevel->base->geometry.height;
+
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, out_w, out_h);
+		wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true);
+	} else {
+		// Restore geometry when leaving fullscreen
+		int width = toplevel->saved_geometry.width > 0 ? toplevel->saved_geometry.width : 800;
+		int height = toplevel->saved_geometry.height > 0 ? toplevel->saved_geometry.height : 600;
+
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, width, height);
+		wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->saved_x, toplevel->saved_y);
+		wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, false);
+	}
+	wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 }
 
 static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
@@ -941,6 +1017,11 @@ int main(int argc, char *argv[]) {
 	wlr_data_device_manager_create(server.wl_display);
 
 	server.output_layout = wlr_output_layout_create(server.wl_display);
+	
+	// --- BIND THE LAYOUT RESIZE LISTENER ---
+	server.layout_change.notify = server_layout_change;
+	wl_signal_add(&server.output_layout->events.change, &server.layout_change);
+
 	wl_list_init(&server.outputs);
 	server.new_output.notify = server_new_output;
 	wl_signal_add(&server.backend->events.new_output, &server.new_output);
@@ -1021,6 +1102,7 @@ int main(int argc, char *argv[]) {
 	wl_list_remove(&server.request_cursor.link);
 	wl_list_remove(&server.request_set_selection.link);
 	wl_list_remove(&server.new_output.link);
+	wl_list_remove(&server.layout_change.link); // Clean up custom layout listener
 
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);
